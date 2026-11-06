@@ -5,6 +5,7 @@ export type ErrorCode =
   | "account_restricted"
   | "insufficient_funds"
   | "invalid_iban"
+  | "idempotency_conflict"
   | "internal_error";
 
 /** A rule the domain refused, carrying the HTTP mapping for the edge. */
@@ -28,6 +29,10 @@ export function validationError(message: string, details?: unknown): DomainError
 
 export function notFound(message: string): DomainError {
   return new DomainError("not_found", message, 404);
+}
+
+export function idempotencyConflict(message: string): DomainError {
+  return new DomainError("idempotency_conflict", message, 409);
 }
 
 export function insufficientFunds(availableMinor: bigint, requestedMinor: bigint): DomainError {

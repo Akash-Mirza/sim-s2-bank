@@ -54,7 +54,7 @@ describe("http surface", () => {
       expect(response.json().mode).toBe("sim");
     }
     const version = await app.inject({ method: "GET", url: "/version" });
-    expect(version.json().schema_version).toBe("0001_init.sql");
+    expect(version.json().schema_version).toBe("0002_idempotency.sql");
     expect(version.headers["x-request-id"]).toBeTruthy();
   });
 
@@ -90,7 +90,7 @@ describe("http surface", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/accounts",
-      headers: { authorization },
+      headers: { authorization, "idempotency-key": "acct-ops-test" },
       payload: {},
     });
     const accountId = created.json().account.id;
@@ -105,7 +105,7 @@ describe("http surface", () => {
     const posted = await app.inject({
       method: "POST",
       url: `/ops/v1/accounts/${accountId}/simulate-credit`,
-      headers: { "x-ops-token": OPS_TOKEN },
+      headers: { "x-ops-token": OPS_TOKEN, "idempotency-key": "ops-credit-1" },
       payload: { amount: "1250.00", reference: "DEP-2026-000123" },
     });
     expect(posted.statusCode).toBe(200);
@@ -127,7 +127,7 @@ describe("http surface", () => {
     const created = await app.inject({
       method: "POST",
       url: "/v1/accounts",
-      headers: { authorization },
+      headers: { authorization, "idempotency-key": "acct-bad-amount" },
       payload: {},
     });
     const accountId = created.json().account.id;
@@ -135,7 +135,7 @@ describe("http surface", () => {
     const badAmount = await app.inject({
       method: "POST",
       url: `/ops/v1/accounts/${accountId}/simulate-credit`,
-      headers: { "x-ops-token": OPS_TOKEN },
+      headers: { "x-ops-token": OPS_TOKEN, "idempotency-key": "ops-bad-amount" },
       payload: { amount: "12.345" },
     });
     expect(badAmount.statusCode).toBe(400);

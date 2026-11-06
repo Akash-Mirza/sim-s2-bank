@@ -2,14 +2,15 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { getAccount, listAccounts, listTransactions } from "../../adapters/db/accounts.js";
-import { createAccount } from "../../application/create-account.js";
-import { postMovement } from "../../application/post-movement.js";
+import { createAccountTx } from "../../application/create-account.js";
+import { postMovementTx } from "../../application/post-movement.js";
 import type { Clock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
 import { notFound, validationError } from "../../domain/errors.js";
 import { formatAmountMinor, parseAmountMinor } from "../../domain/money.js";
 import { authenticate } from "../auth.js";
+import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
 
 export interface AccountRouteDeps {
   db: Pool;
@@ -86,24 +87,43 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
   app.post("/v1/accounts", async (request, reply) => {
     const principal = await authenticate(db, env.apiKeyPepper, request.headers.authorization);
     const body = createAccountBody.parse(request.body ?? {});
+    const key = requireIdempotencyKey(request);
 
-    const account = await createAccount(db, {
-      tenantId: principal.tenantId,
-      productCode: body.product_code,
-      actor: `api_key:${principal.keyId}`,
-      requestId: request.id,
-    });
+    const result = await withIdempotency(
+      {
+        db,
+        tenantId: principal.tenantId,
+        key,
+        method: request.method,
+        route: request.routeOptions.url ?? request.url,
+        body,
+      },
+      async (client) => {
+        const account = await createAccountTx(client, {
+          tenantId: principal.tenantId,
+          productCode: body.product_code,
+          actor: `api_key:${principal.keyId}`,
+          requestId: request.id,
+        });
 
-    return reply.status(201).send({
-      mode: MODE,
-      account: serializeAccount(account),
-      balance: serializeBalance({
-        availableMinor: 0n,
-        pendingMinor: 0n,
-        heldMinor: 0n,
-        ledgerMinor: 0n,
-      }),
-    });
+        return {
+          status: 201,
+          body: {
+            mode: MODE,
+            account: serializeAccount(account),
+            balance: serializeBalance({
+              availableMinor: 0n,
+              pendingMinor: 0n,
+              heldMinor: 0n,
+              ledgerMinor: 0n,
+            }),
+          },
+        };
+      },
+    );
+
+    if (result.replayed) reply.header("idempotent-replayed", "true");
+    return reply.status(result.status).send(result.body);
   });
 
   app.get("/v1/accounts", async (request) => {
@@ -164,44 +184,63 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     };
   });
 
-  app.post<{ Params: { id: string } }>("/v1/accounts/:id/credits:simulate", async (request) => {
-    const principal = await authenticate(db, env.apiKeyPepper, request.headers.authorization);
-    if (!principal.scopes.includes("accounts:write")) {
-      throw validationError("api key lacks accounts:write scope");
-    }
-    const body = creditBody.parse(request.body ?? {});
-    const amountMinor = parseAmountMinor(body.amount);
+  app.post<{ Params: { id: string } }>(
+    "/v1/accounts/:id/credits:simulate",
+    async (request, reply) => {
+      const principal = await authenticate(db, env.apiKeyPepper, request.headers.authorization);
+      if (!principal.scopes.includes("accounts:write")) {
+        throw validationError("api key lacks accounts:write scope");
+      }
+      const body = creditBody.parse(request.body ?? {});
+      const amountMinor = parseAmountMinor(body.amount);
+      const key = requireIdempotencyKey(request);
 
-    const result = await postMovement(
-      { db, clock },
-      {
-        tenantId: principal.tenantId,
-        accountId: request.params.id,
-        direction: "credit",
-        type: "credit_transfer",
-        amountMinor,
-        reference: body.reference,
-        endToEndId: body.end_to_end_id,
-        remitter: body.remitter,
-        valueDate: body.value_date,
-        actor: `api_key:${principal.keyId}`,
-        requestId: request.id,
-      },
-    );
+      const result = await withIdempotency(
+        {
+          db,
+          tenantId: principal.tenantId,
+          key,
+          method: request.method,
+          route: request.routeOptions.url ?? request.url,
+          body,
+        },
+        async (client) => {
+          const movement = await postMovementTx(client, clock, {
+            tenantId: principal.tenantId,
+            accountId: request.params.id,
+            direction: "credit",
+            type: "credit_transfer",
+            amountMinor,
+            reference: body.reference,
+            endToEndId: body.end_to_end_id,
+            remitter: body.remitter,
+            valueDate: body.value_date,
+            actor: `api_key:${principal.keyId}`,
+            requestId: request.id,
+          });
 
-    return {
-      mode: MODE,
-      transaction: {
-        id: result.transaction.id,
-        type: result.transaction.type,
-        status: result.transaction.status,
-        amount: formatAmountMinor(result.transaction.amountMinor),
-        currency: result.transaction.currency,
-        reference: result.transaction.reference,
-        value_date: result.transaction.valueDate,
-        booking_date: result.transaction.bookingDate,
-      },
-      balance: serializeBalance(result.balance),
-    };
-  });
+          return {
+            status: 200,
+            body: {
+              mode: MODE,
+              transaction: {
+                id: movement.transaction.id,
+                type: movement.transaction.type,
+                status: movement.transaction.status,
+                amount: formatAmountMinor(movement.transaction.amountMinor),
+                currency: movement.transaction.currency,
+                reference: movement.transaction.reference,
+                value_date: movement.transaction.valueDate,
+                booking_date: movement.transaction.bookingDate,
+              },
+              balance: serializeBalance(movement.balance),
+            },
+          };
+        },
+      );
+
+      if (result.replayed) reply.header("idempotent-replayed", "true");
+      return reply.status(result.status).send(result.body);
+    },
+  );
 }
