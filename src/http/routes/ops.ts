@@ -2,12 +2,13 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { getAccountUnscoped } from "../../adapters/db/accounts.js";
-import { postMovement } from "../../application/post-movement.js";
+import { postMovementTx } from "../../application/post-movement.js";
 import type { Clock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
 import { notFound } from "../../domain/errors.js";
 import { formatAmountMinor, parseAmountMinor } from "../../domain/money.js";
+import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
 
 export interface OpsRouteDeps {
   db: Pool;
@@ -63,44 +64,62 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
       }
 
       const body = simulateCreditBody.parse(request.body ?? {});
+      const amountMinor = parseAmountMinor(body.amount);
+      const key = requireIdempotencyKey(request);
+
       const found = await getAccountUnscoped(db, request.params.id);
       if (found === null) throw notFound("account not found");
 
-      const result = await postMovement(
-        { db, clock },
+      const result = await withIdempotency(
         {
+          db,
           tenantId: found.account.tenantId,
-          accountId: found.account.id,
-          direction: "credit",
-          type: "credit_transfer",
-          amountMinor: parseAmountMinor(body.amount),
-          reference: body.reference,
-          remitter: body.remitter,
-          valueDate: body.value_date,
-          actor: "ops:dev",
-          requestId: request.id,
+          key,
+          method: request.method,
+          route: request.routeOptions.url ?? request.url,
+          body: { account_id: request.params.id, ...body },
+        },
+        async (client) => {
+          const movement = await postMovementTx(client, clock, {
+            tenantId: found.account.tenantId,
+            accountId: found.account.id,
+            direction: "credit",
+            type: "credit_transfer",
+            amountMinor,
+            reference: body.reference,
+            remitter: body.remitter,
+            valueDate: body.value_date,
+            actor: "ops:dev",
+            requestId: request.id,
+          });
+
+          return {
+            status: 200,
+            body: {
+              mode: MODE,
+              transaction: {
+                id: movement.transaction.id,
+                type: movement.transaction.type,
+                status: movement.transaction.status,
+                amount: formatAmountMinor(movement.transaction.amountMinor),
+                currency: movement.transaction.currency,
+                reference: movement.transaction.reference,
+                value_date: movement.transaction.valueDate,
+                booking_date: movement.transaction.bookingDate,
+              },
+              balance: {
+                available: formatAmountMinor(movement.balance.availableMinor),
+                pending: formatAmountMinor(movement.balance.pendingMinor),
+                held: formatAmountMinor(movement.balance.heldMinor),
+                ledger: formatAmountMinor(movement.balance.ledgerMinor),
+              },
+            },
+          };
         },
       );
 
-      return {
-        mode: MODE,
-        transaction: {
-          id: result.transaction.id,
-          type: result.transaction.type,
-          status: result.transaction.status,
-          amount: formatAmountMinor(result.transaction.amountMinor),
-          currency: result.transaction.currency,
-          reference: result.transaction.reference,
-          value_date: result.transaction.valueDate,
-          booking_date: result.transaction.bookingDate,
-        },
-        balance: {
-          available: formatAmountMinor(result.balance.availableMinor),
-          pending: formatAmountMinor(result.balance.pendingMinor),
-          held: formatAmountMinor(result.balance.heldMinor),
-          ledger: formatAmountMinor(result.balance.ledgerMinor),
-        },
-      };
+      if (result.replayed) reply.header("idempotent-replayed", "true");
+      return reply.status(result.status).send(result.body);
     },
   );
 }

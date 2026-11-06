@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import type { Pool } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { BANK_CODE, BIC, CURRENCY } from "../domain/constants.js";
 import { buildUaeIban } from "../domain/iban.js";
 
@@ -65,54 +65,71 @@ function isUniqueViolation(error: unknown): boolean {
   );
 }
 
+async function insertAccount(client: PoolClient, input: CreateAccountInput): Promise<Account> {
+  const productCode = input.productCode ?? "corporate_current";
+  let account: Account | undefined;
+
+  for (let attempt = 0; attempt < 5 && account === undefined; attempt += 1) {
+    const accountNumber = generateAccountNumber();
+    const iban = buildUaeIban(BANK_CODE, accountNumber);
+    // A failed INSERT aborts the Postgres transaction; the savepoint lets us retry
+    // on the (vanishingly rare) account-number collision without poisoning it.
+    await client.query("SAVEPOINT account_number_attempt");
+    try {
+      const inserted = await client.query<AccountRow>(
+        `INSERT INTO accounts (tenant_id, account_number, iban, bic, currency, product_code, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'open')
+         RETURNING id, tenant_id, account_number, iban, bic, currency, product_code, status, opened_at`,
+        [input.tenantId, accountNumber, iban, BIC, CURRENCY, productCode],
+      );
+      const row = inserted.rows[0];
+      if (row !== undefined) account = mapAccount(row);
+      await client.query("RELEASE SAVEPOINT account_number_attempt");
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      await client.query("ROLLBACK TO SAVEPOINT account_number_attempt");
+    }
+  }
+
+  if (account === undefined) {
+    throw new Error("could not allocate a unique account number");
+  }
+
+  await client.query(
+    `INSERT INTO account_balances (account_id, available_minor, pending_minor, held_minor, ledger_minor)
+     VALUES ($1, 0, 0, 0, 0)`,
+    [account.id],
+  );
+
+  await client.query(
+    `INSERT INTO audit_log (tenant_id, actor, action, entity_type, entity_id, after, request_id)
+     VALUES ($1, $2, 'account.opened', 'account', $3, $4, $5)`,
+    [
+      input.tenantId,
+      input.actor,
+      account.id,
+      JSON.stringify({ iban: account.iban, product_code: account.productCode }),
+      input.requestId ?? null,
+    ],
+  );
+
+  return account;
+}
+
+/** Create an account on a caller-owned transaction (idempotent write path). */
+export async function createAccountTx(
+  client: PoolClient,
+  input: CreateAccountInput,
+): Promise<Account> {
+  return insertAccount(client, input);
+}
+
 /** Create the account row and its zeroed balance cache in one transaction. */
 export async function createAccount(db: Pool, input: CreateAccountInput): Promise<Account> {
-  const productCode = input.productCode ?? "corporate_current";
   const client = await db.connect();
-
   try {
     await client.query("BEGIN");
-
-    let account: Account | undefined;
-    for (let attempt = 0; attempt < 5 && account === undefined; attempt += 1) {
-      const accountNumber = generateAccountNumber();
-      const iban = buildUaeIban(BANK_CODE, accountNumber);
-      try {
-        const inserted = await client.query<AccountRow>(
-          `INSERT INTO accounts (tenant_id, account_number, iban, bic, currency, product_code, status)
-           VALUES ($1, $2, $3, $4, $5, $6, 'open')
-           RETURNING id, tenant_id, account_number, iban, bic, currency, product_code, status, opened_at`,
-          [input.tenantId, accountNumber, iban, BIC, CURRENCY, productCode],
-        );
-        const row = inserted.rows[0];
-        if (row !== undefined) account = mapAccount(row);
-      } catch (error) {
-        if (!isUniqueViolation(error)) throw error;
-      }
-    }
-
-    if (account === undefined) {
-      throw new Error("could not allocate a unique account number");
-    }
-
-    await client.query(
-      `INSERT INTO account_balances (account_id, available_minor, pending_minor, held_minor, ledger_minor)
-       VALUES ($1, 0, 0, 0, 0)`,
-      [account.id],
-    );
-
-    await client.query(
-      `INSERT INTO audit_log (tenant_id, actor, action, entity_type, entity_id, after, request_id)
-       VALUES ($1, $2, 'account.opened', 'account', $3, $4, $5)`,
-      [
-        input.tenantId,
-        input.actor,
-        account.id,
-        JSON.stringify({ iban: account.iban, product_code: account.productCode }),
-        input.requestId ?? null,
-      ],
-    );
-
+    const account = await insertAccount(client, input);
     await client.query("COMMIT");
     return account;
   } catch (error) {

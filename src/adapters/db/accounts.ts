@@ -1,6 +1,6 @@
-import type { Pool } from "pg";
 import { type Account, mapAccount } from "../../application/create-account.js";
 import { validationError } from "../../domain/errors.js";
+import type { Queryable } from "./types.js";
 
 export interface Balance {
   accountId: string;
@@ -101,7 +101,7 @@ const ACCOUNT_WITH_BALANCE_SELECT = `
 type JoinedRow = AccountRow & BalanceRow;
 
 export async function getAccount(
-  db: Pool,
+  db: Queryable,
   tenantId: string,
   accountId: string,
 ): Promise<AccountWithBalance | null> {
@@ -116,7 +116,7 @@ export async function getAccount(
 
 /** Ops-side lookup: the simulator operator may address any tenant's account. */
 export async function getAccountUnscoped(
-  db: Pool,
+  db: Queryable,
   accountId: string,
 ): Promise<AccountWithBalance | null> {
   const result = await db.query<JoinedRow>(`${ACCOUNT_WITH_BALANCE_SELECT} WHERE a.id = $1`, [
@@ -127,7 +127,7 @@ export async function getAccountUnscoped(
   return { account: mapAccount(row), balance: mapBalance(row) };
 }
 
-export async function listAccounts(db: Pool, tenantId: string): Promise<AccountWithBalance[]> {
+export async function listAccounts(db: Queryable, tenantId: string): Promise<AccountWithBalance[]> {
   const result = await db.query<JoinedRow>(
     `${ACCOUNT_WITH_BALANCE_SELECT} WHERE a.tenant_id = $1 ORDER BY a.opened_at ASC`,
     [tenantId],
@@ -158,7 +158,7 @@ function decodeCursor(cursor: string): { postedAt: string; id: string } {
 }
 
 export async function listTransactions(
-  db: Pool,
+  db: Queryable,
   tenantId: string,
   accountId: string,
   options: { limit: number; cursor?: string },
