@@ -54,7 +54,7 @@ describe("http surface", () => {
       expect(response.json().mode).toBe("sim");
     }
     const version = await app.inject({ method: "GET", url: "/version" });
-    expect(version.json().schema_version).toBe("0002_idempotency.sql");
+    expect(version.json().schema_version).toBe("0003_payouts_holds.sql");
     expect(version.headers["x-request-id"]).toBeTruthy();
   });
 

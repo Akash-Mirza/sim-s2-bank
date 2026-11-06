@@ -4,12 +4,13 @@ S2 bank simulator for the BWLCS1 white-label stablecoin case study.
 
 It is a **simulated corporate bank**, not a real bank and not the client portal: a
 tenant (the issuer) gets a corporate AED account with a virtual UAE IBAN, a
-double-entry ledger in fils, simulated incoming credit, and later statements and
-local AED payouts. Every response carries `"mode":"sim"` and the data is
-synthetic.
+double-entry ledger in fils, simulated incoming credit, replay-safe writes, holds,
+and local AED payouts with a UAE cut-off. Every response carries `"mode":"sim"` and
+the data is synthetic.
 
-Status: **phases 1–4 of 13 shipped** (`v0.1.0-dev.0`) — scaffold and deploy
-contract, schema/migrations/seed, double-entry ledger, accounts and balances.
+Status: **phases 1–6 of 13 shipped** (`v0.2.0-dev.0`) — scaffold and deploy
+contract, schema/migrations/seed, double-entry ledger, accounts and balances,
+idempotency, holds and payouts.
 
 ## Scope delivered so far
 
@@ -19,9 +20,11 @@ contract, schema/migrations/seed, double-entry ledger, accounts and balances.
 | 2 | `S2-02` | `0001_init.sql`, numbered migration runner, API key hashing, idempotent seed, guarded reset |
 | 3 | `S2-03` | Money as bigint fils, UAE IBAN (mod-97), double-entry pairs, balance rules, atomic posting with row locks and audit |
 | 4 | `S2-04` | Accounts, balances, transaction listing, bearer key auth, dev-only ops credit endpoint |
+| 5 | `S2-05` | `Idempotency-Key` enforced on all writes; key row commits with the money; replay, 409 conflict, concurrency |
+| 6 | `S2-06` | Holds (reserve/release/capture), payouts with the ten-state machine, UAE business calendar + 15:00 cut-off, ops advance/reverse |
 
-Not built yet: holds, payouts and the payout state machine, statements
-(JSON/CSV/MT940), webhooks/outbox, failure scenarios, ops console, OpenAPI, release.
+Not built yet: statements (JSON/CSV/MT940), webhooks/outbox, failure scenarios,
+beneficiary book, ops console, OpenAPI, live deploy, release.
 
 ## Run locally
 
@@ -34,13 +37,33 @@ pnpm seed          # prints the demo API key once
 pnpm dev           # http://localhost:4002
 ```
 
-Smoke test:
+Smoke test (every write needs an idempotency key):
 
 ```bash
 curl -s localhost:4002/health
 curl -s localhost:4002/version
 curl -s localhost:4002/v1/accounts -H "Authorization: Bearer <key from seed>"
+
+# simulate a credit
+curl -s -X POST localhost:4002/v1/accounts/<account>/credits:simulate \
+  -H "Authorization: Bearer <key>" -H 'content-type: application/json' \
+  -H 'Idempotency-Key: dep-2026-000123' \
+  -d '{"amount":"1250.00","reference":"DEP-2026-000123"}'
+
+# create a payout, then walk it to settled (ops is dev-only)
+curl -s -X POST localhost:4002/v1/payouts \
+  -H "Authorization: Bearer <key>" -H 'content-type: application/json' \
+  -H 'Idempotency-Key: pay-2026-000456' \
+  -d '{"account_id":"<account>","amount":"400.00","reference":"INV-2026-0042",
+       "beneficiary":{"name":"GULF SUPPLIES LLC","iban":"<valid UAE IBAN>","bic":"EBILAEAD"}}'
+
+curl -s -X POST localhost:4002/ops/v1/payouts/<payout>/advance \
+  -H "x-ops-token: dev-ops-token" -H 'Idempotency-Key: adv-1' -d '{}'
 ```
+
+After cut-off (15:00 GST) a payout without a `value_date` is scheduled for the next
+business day; asking for same-day settlement after the cut-off returns
+`422 cutoff_passed`.
 
 ## Checks
 
@@ -64,10 +87,10 @@ TEST_DATABASE_URL=postgres://sim_s2:sim_s2@localhost:5435/sim_s2_test pnpm test:
 
 ```text
 src/
-├── domain/        pure money, IBAN, ledger, and balance rules (no I/O)
-├── application/   use cases: create account, post movement
+├── domain/        pure money, IBAN, ledger, balance, calendar, payout rules
+├── application/   use cases: accounts, postings, holds, payouts
 ├── adapters/      Postgres, migrations, crypto
-├── http/          routes, auth, error mapping, composition root
+├── http/          routes, auth, idempotency, error mapping, composition root
 ├── config/        env validation, clock
 └── cli/           migrate, seed, reset (built into dist for compose)
 migrations/        numbered plain SQL
@@ -81,8 +104,9 @@ api/index.ts       Vercel Node handler
 - Money is `bigint` fils. Never floats.
 - Every movement is a balanced double-entry pair; unbalanced is rejected.
 - Posted rows are immutable; corrections are reversals.
-- Balance cache is updated in the same transaction under `FOR UPDATE`; the ledger
-  is the source of truth.
+- A hold changes available, never the ledger; settlement captures it atomically.
+- Every write takes `Idempotency-Key`; the key row commits with the change.
+- Payout transitions are a closed state machine; illegal moves are `409`.
 - The tenant comes from the API key, never from the request body.
 - No secrets, no real PII, no real bank connectivity.
 

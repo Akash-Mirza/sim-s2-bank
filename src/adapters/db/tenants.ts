@@ -55,7 +55,12 @@ export async function createApiKey(
   input: { tenantId: string; pepper: string; scopes?: string[] },
 ): Promise<IssuedApiKey> {
   const generated = generateApiKey(input.pepper);
-  const scopes = input.scopes ?? ["accounts:read", "accounts:write"];
+  const scopes = input.scopes ?? [
+    "accounts:read",
+    "accounts:write",
+    "payouts:read",
+    "payouts:write",
+  ];
   const result = await db.query<{ id: string }>(
     `INSERT INTO api_keys (tenant_id, prefix, secret_hash, scopes)
      VALUES ($1, $2, $3, $4)
