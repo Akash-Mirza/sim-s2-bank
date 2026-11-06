@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
+import { createPool } from "../adapters/db/pool.js";
 import { fixedClock } from "../config/clock.js";
 import type { Env } from "../config/env.js";
-import { createPool } from "../adapters/db/pool.js";
 import { errorBody, handleError } from "./errors.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerHealthRoutes } from "./routes/health.js";
