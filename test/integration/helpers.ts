@@ -27,7 +27,8 @@ export async function connectTestDatabase(): Promise<Pool> {
 export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(
     `TRUNCATE audit_log, ledger_entries, transactions, account_balances,
-              accounts, api_keys, tenants, idempotency_keys RESTART IDENTITY CASCADE`,
+              accounts, api_keys, tenants, idempotency_keys,
+              payout_events, payouts, holds RESTART IDENTITY CASCADE`,
   );
 }
 

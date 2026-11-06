@@ -7,7 +7,7 @@ import { postMovementTx } from "../../application/post-movement.js";
 import type { Clock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
-import { notFound, validationError } from "../../domain/errors.js";
+import { forbidden, notFound } from "../../domain/errors.js";
 import { formatAmountMinor, parseAmountMinor } from "../../domain/money.js";
 import { authenticate } from "../auth.js";
 import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
@@ -189,7 +189,7 @@ export function registerAccountRoutes(app: FastifyInstance, deps: AccountRouteDe
     async (request, reply) => {
       const principal = await authenticate(db, env.apiKeyPepper, request.headers.authorization);
       if (!principal.scopes.includes("accounts:write")) {
-        throw validationError("api key lacks accounts:write scope");
+        throw forbidden("api key lacks accounts:write scope");
       }
       const body = creditBody.parse(request.body ?? {});
       const amountMinor = parseAmountMinor(body.amount);

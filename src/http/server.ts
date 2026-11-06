@@ -7,6 +7,7 @@ import { errorBody, handleError } from "./errors.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerOpsRoutes } from "./routes/ops.js";
+import { registerPayoutRoutes } from "./routes/payouts.js";
 
 export function buildServer(env: Env): FastifyInstance {
   const app = Fastify({
@@ -39,6 +40,7 @@ export function buildServer(env: Env): FastifyInstance {
 
   registerHealthRoutes(app, { env, db });
   registerAccountRoutes(app, { db, env, clock });
+  registerPayoutRoutes(app, { db, env, clock });
   registerOpsRoutes(app, { db, env, clock });
 
   return app;

@@ -25,6 +25,8 @@ export interface PostMovementInput {
   requestId?: string;
   /** Held amount this movement consumes (payout settlement). */
   releaseHeldMinor?: bigint;
+  /** Original transaction this one reverses (reversal credits). */
+  reversalOf?: string;
 }
 
 export interface PostedTransaction {
@@ -121,8 +123,8 @@ export async function postMovementTx(
   const inserted = await client.query<{ id: string; posted_at: Date }>(
     `INSERT INTO transactions (
        account_id, type, status, amount_minor, currency, reference, end_to_end_id,
-       remitter_name, remitter_iban, remitter_bic, value_date, booking_date, posted_at
-     ) VALUES ($1, $2, 'posted', $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+       remitter_name, remitter_iban, remitter_bic, value_date, booking_date, posted_at, reversal_of
+     ) VALUES ($1, $2, 'posted', $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12)
      RETURNING id, posted_at`,
     [
       input.accountId,
@@ -136,6 +138,7 @@ export async function postMovementTx(
       input.remitter?.bic ?? null,
       value,
       booking,
+      input.reversalOf ?? null,
     ],
   );
 

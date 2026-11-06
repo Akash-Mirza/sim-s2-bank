@@ -2,13 +2,17 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { getAccountUnscoped } from "../../adapters/db/accounts.js";
+import { getPayoutUnscoped } from "../../adapters/db/payouts.js";
+import { advancePayoutTx, reverseSettledPayoutTx } from "../../application/payouts.js";
 import { postMovementTx } from "../../application/post-movement.js";
 import type { Clock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
 import { notFound } from "../../domain/errors.js";
 import { formatAmountMinor, parseAmountMinor } from "../../domain/money.js";
+import { PAYOUT_STATUSES } from "../../domain/payout.js";
 import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
+import { serializeBalance, serializePayout } from "./payouts.js";
 
 export interface OpsRouteDeps {
   db: Pool;
@@ -30,6 +34,10 @@ const simulateCreditBody = z.object({
       bic: z.string().min(8).max(11).optional(),
     })
     .optional(),
+});
+
+const advanceBody = z.object({
+  to: z.enum(PAYOUT_STATUSES).optional(),
 });
 
 /**
@@ -107,12 +115,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
                 value_date: movement.transaction.valueDate,
                 booking_date: movement.transaction.bookingDate,
               },
-              balance: {
-                available: formatAmountMinor(movement.balance.availableMinor),
-                pending: formatAmountMinor(movement.balance.pendingMinor),
-                held: formatAmountMinor(movement.balance.heldMinor),
-                ledger: formatAmountMinor(movement.balance.ledgerMinor),
-              },
+              balance: serializeBalance(movement.balance),
             },
           };
         },
@@ -122,4 +125,106 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
       return reply.status(result.status).send(result.body);
     },
   );
+
+  app.post<{ Params: { id: string } }>("/ops/v1/payouts/:id/advance", async (request, reply) => {
+    if (request.headers["x-ops-token"] !== env.opsDevToken) {
+      return reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "invalid ops token",
+          request_id: request.id,
+          details: null,
+        },
+      });
+    }
+
+    const body = advanceBody.parse(request.body ?? {});
+    const key = requireIdempotencyKey(request);
+
+    const found = await getPayoutUnscoped(db, request.params.id);
+    if (found === null) throw notFound("payout not found");
+
+    const result = await withIdempotency(
+      {
+        db,
+        tenantId: found.tenantId,
+        key,
+        method: request.method,
+        route: request.routeOptions.url ?? request.url,
+        body: { payout_id: request.params.id, ...body },
+      },
+      async (client) => {
+        const advanced = await advancePayoutTx(client, {
+          clock,
+          payoutId: request.params.id,
+          to: body.to,
+          actor: "ops:dev",
+          requestId: request.id,
+        });
+
+        return {
+          status: 200,
+          body: {
+            mode: MODE,
+            payout: serializePayout(advanced.payout),
+            events: advanced.events,
+            balance: advanced.balance === null ? null : serializeBalance(advanced.balance),
+          },
+        };
+      },
+    );
+
+    if (result.replayed) reply.header("idempotent-replayed", "true");
+    return reply.status(result.status).send(result.body);
+  });
+
+  app.post<{ Params: { id: string } }>("/ops/v1/payouts/:id/reverse", async (request, reply) => {
+    if (request.headers["x-ops-token"] !== env.opsDevToken) {
+      return reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "invalid ops token",
+          request_id: request.id,
+          details: null,
+        },
+      });
+    }
+
+    const key = requireIdempotencyKey(request);
+
+    const found = await getPayoutUnscoped(db, request.params.id);
+    if (found === null) throw notFound("payout not found");
+
+    const result = await withIdempotency(
+      {
+        db,
+        tenantId: found.tenantId,
+        key,
+        method: request.method,
+        route: request.routeOptions.url ?? request.url,
+        body: { payout_id: request.params.id },
+      },
+      async (client) => {
+        const reversed = await reverseSettledPayoutTx(client, {
+          clock,
+          payoutId: request.params.id,
+          actor: "ops:dev",
+          requestId: request.id,
+        });
+
+        return {
+          status: 200,
+          body: {
+            mode: MODE,
+            payout: serializePayout(reversed.payout),
+            events: reversed.events,
+            balance: reversed.balance === null ? null : serializeBalance(reversed.balance),
+          },
+        };
+      },
+    );
+
+    if (result.replayed) reply.header("idempotent-replayed", "true");
+    return reply.status(result.status).send(result.body);
+  });
 }
