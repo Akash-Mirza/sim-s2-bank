@@ -5,19 +5,20 @@ import { getAccountUnscoped } from "../../adapters/db/accounts.js";
 import { getPayoutUnscoped } from "../../adapters/db/payouts.js";
 import { advancePayoutTx, reverseSettledPayoutTx } from "../../application/payouts.js";
 import { postMovementTx } from "../../application/post-movement.js";
-import type { Clock } from "../../config/clock.js";
+import type { AdjustableClock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
 import { notFound } from "../../domain/errors.js";
 import { formatAmountMinor, parseAmountMinor } from "../../domain/money.js";
 import { PAYOUT_STATUSES } from "../../domain/payout.js";
 import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
+import { registerOpsClockRoutes } from "./ops-clock.js";
 import { serializeBalance, serializePayout } from "./payouts.js";
 
 export interface OpsRouteDeps {
   db: Pool;
   env: Env;
-  clock: Clock;
+  clock: AdjustableClock;
 }
 
 const simulateCreditBody = z.object({
@@ -227,4 +228,6 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
     if (result.replayed) reply.header("idempotent-replayed", "true");
     return reply.status(result.status).send(result.body);
   });
+
+  registerOpsClockRoutes(app, { env, clock });
 }

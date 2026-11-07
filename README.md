@@ -8,9 +8,9 @@ double-entry ledger in fils, simulated incoming credit, replay-safe writes, hold
 and local AED payouts with a UAE cut-off. Every response carries `"mode":"sim"` and
 the data is synthetic.
 
-Status: **phases 1–6 of 13 shipped** (`v0.2.0-dev.0`) — scaffold and deploy
+Status: **phases 1–7 of 13 shipped** (`v0.3.0-dev.0`) — scaffold and deploy
 contract, schema/migrations/seed, double-entry ledger, accounts and balances,
-idempotency, holds and payouts.
+idempotency, holds and payouts, statements/EOD and the adjustable ops clock.
 
 ## Scope delivered so far
 
@@ -22,9 +22,10 @@ idempotency, holds and payouts.
 | 4 | `S2-04` | Accounts, balances, transaction listing, bearer key auth, dev-only ops credit endpoint |
 | 5 | `S2-05` | `Idempotency-Key` enforced on all writes; key row commits with the money; replay, 409 conflict, concurrency |
 | 6 | `S2-06` | Holds (reserve/release/capture), payouts with the ten-state machine, UAE business calendar + 15:00 cut-off, ops advance/reverse |
+| 7 | `S2-07` | Statements (JSON/CSV/MT940) for any booking-date range, sequential EOD snapshots, adjustable ops clock (freeze/step/resume) |
 
-Not built yet: statements (JSON/CSV/MT940), webhooks/outbox, failure scenarios,
-beneficiary book, ops console, OpenAPI, live deploy, release.
+Not built yet: webhooks/outbox, failure scenarios, beneficiary book, ops console,
+OpenAPI, live deploy, release.
 
 ## Run locally
 
@@ -59,6 +60,23 @@ curl -s -X POST localhost:4002/v1/payouts \
 
 curl -s -X POST localhost:4002/ops/v1/payouts/<payout>/advance \
   -H "x-ops-token: dev-ops-token" -H 'Idempotency-Key: adv-1' -d '{}'
+
+# statements: the same day in three formats
+curl -s "localhost:4002/v1/accounts/<account>/statement?from=2026-11-05&to=2026-11-05"
+curl -s "localhost:4002/v1/accounts/<account>/statements/2026-11-05/csv"
+curl -s "localhost:4002/v1/accounts/<account>/statements/2026-11-05/mt940"
+
+# close the day, then read the snapshot
+curl -s -X POST localhost:4002/v1/accounts/<account>/eod/close \
+  -H "Authorization: Bearer <key>" -H 'content-type: application/json' \
+  -H 'Idempotency-Key: eod-2026-11-05' -d '{"business_date":"2026-11-05"}'
+curl -s localhost:4002/v1/accounts/<account>/eod -H "Authorization: Bearer <key>"
+
+# move the simulator clock (dev only)
+curl -s -X POST localhost:4002/ops/v1/clock/freeze -H 'x-ops-token: dev-ops-token' \
+  -H 'content-type: application/json' -d '{"at":"2026-11-05T08:00:00.000Z"}'
+curl -s -X POST localhost:4002/ops/v1/clock/step -H 'x-ops-token: dev-ops-token' \
+  -H 'content-type: application/json' -d '{"days":1}'
 ```
 
 After cut-off (15:00 GST) a payout without a `value_date` is scheduled for the next
@@ -87,11 +105,11 @@ TEST_DATABASE_URL=postgres://sim_s2:sim_s2@localhost:5435/sim_s2_test pnpm test:
 
 ```text
 src/
-├── domain/        pure money, IBAN, ledger, balance, calendar, payout rules
-├── application/   use cases: accounts, postings, holds, payouts
+├── domain/        pure money, IBAN, ledger, balance, calendar, payout, statement, EOD rules
+├── application/   use cases: accounts, postings, holds, payouts, statements, EOD
 ├── adapters/      Postgres, migrations, crypto
 ├── http/          routes, auth, idempotency, error mapping, composition root
-├── config/        env validation, clock
+├── config/        env validation, adjustable clock
 └── cli/           migrate, seed, reset (built into dist for compose)
 migrations/        numbered plain SQL
 test/unit          fast rules tests
@@ -107,6 +125,8 @@ api/index.ts       Vercel Node handler
 - A hold changes available, never the ledger; settlement captures it atomically.
 - Every write takes `Idempotency-Key`; the key row commits with the change.
 - Payout transitions are a closed state machine; illegal moves are `409`.
+- A statement is one model rendered three ways; it must reconcile line by line.
+- EOD is sequential: no repeats, no skipped business days.
 - The tenant comes from the API key, never from the request body.
 - No secrets, no real PII, no real bank connectivity.
 

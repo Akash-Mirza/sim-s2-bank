@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createPool } from "../adapters/db/pool.js";
-import { fixedClock } from "../config/clock.js";
+import { adjustableClock } from "../config/clock.js";
 import type { Env } from "../config/env.js";
 import { errorBody, handleError } from "./errors.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
+import { registerEodRoutes } from "./routes/eod.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerOpsRoutes } from "./routes/ops.js";
 import { registerPayoutRoutes } from "./routes/payouts.js";
+import { registerStatementRoutes } from "./routes/statements.js";
 
 export function buildServer(env: Env): FastifyInstance {
   const app = Fastify({
@@ -23,7 +25,7 @@ export function buildServer(env: Env): FastifyInstance {
   });
 
   const db = createPool(env.databaseUrl);
-  const clock = fixedClock(env.simClock);
+  const clock = adjustableClock(env.simClock);
 
   app.addHook("onSend", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -41,6 +43,8 @@ export function buildServer(env: Env): FastifyInstance {
   registerHealthRoutes(app, { env, db });
   registerAccountRoutes(app, { db, env, clock });
   registerPayoutRoutes(app, { db, env, clock });
+  registerStatementRoutes(app, { db, env, clock });
+  registerEodRoutes(app, { db, env, clock });
   registerOpsRoutes(app, { db, env, clock });
 
   return app;

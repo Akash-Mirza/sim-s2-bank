@@ -14,7 +14,7 @@ const rawEnvSchema = z
     ENABLE_DEV_OPS: z.enum(["true", "false"]).default("false"),
     OPS_DEV_TOKEN: z.string().min(8).default("dev-ops-token"),
     API_KEY_PEPPER: z.string().min(16),
-    SERVICE_VERSION: z.string().min(1).default("0.2.0-dev.0"),
+    SERVICE_VERSION: z.string().min(1).default("0.3.0-dev.0"),
     GIT_COMMIT: z.string().min(1).default("dev"),
   })
   .superRefine((value, ctx) => {
