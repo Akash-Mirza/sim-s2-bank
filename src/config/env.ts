@@ -10,7 +10,8 @@ const rawEnvSchema = z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),
     SIM_CLOCK: z.string().datetime({ offset: true }).optional(),
-    ENABLE_DEV_OPS: z.enum(["true", "false"]).default("true"),
+    // Fail closed: a production process must opt in explicitly, never by omission.
+    ENABLE_DEV_OPS: z.enum(["true", "false"]).default("false"),
     OPS_DEV_TOKEN: z.string().min(8).default("dev-ops-token"),
     API_KEY_PEPPER: z.string().min(16),
     SERVICE_VERSION: z.string().min(1).default("0.2.0-dev.0"),
