@@ -24,10 +24,11 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://sim_s2:sim_s2@postgres:5432/sim_s2
       API_KEY_PEPPER: local-development-pepper-only
-    command: ["node", "dist/scripts/migrate.js"]
+    command: ["node", "dist/cli/migrate.js"]
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
 
   api:
     build:
@@ -47,6 +48,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: "no"
 
 volumes:
   pgdata:
