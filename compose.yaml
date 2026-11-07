@@ -24,6 +24,7 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://sim_s2:sim_s2@postgres:5432/sim_s2
       API_KEY_PEPPER: local-development-pepper-only
+      ENABLE_DEV_OPS: "false"
     command: ["node", "dist/cli/migrate.js"]
     depends_on:
       postgres:
@@ -40,7 +41,7 @@ services:
       DATABASE_URL: postgres://sim_s2:sim_s2@postgres:5432/sim_s2
       API_PORT: 4002
       API_KEY_PEPPER: local-development-pepper-only
-      ENABLE_DEV_OPS: "true"
+      ENABLE_DEV_OPS: "false"
       OPS_DEV_TOKEN: dev-ops-token
       TZ: Asia/Dubai
     ports:

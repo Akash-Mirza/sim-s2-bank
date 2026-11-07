@@ -1,0 +1,13 @@
+# Local demo override. The base compose file is production-shaped and refuses
+# to boot with dev ops enabled. Use this file when you want the ops console/clock
+# and payout advance endpoints in the local stack:
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml up -d --build postgres migrate api
+#
+# Never use this override for a hosted environment.
+services:
+  api:
+    environment:
+      NODE_ENV: development
+      ENABLE_DEV_OPS: "true"
+      OPS_DEV_TOKEN: dev-ops-token
