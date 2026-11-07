@@ -29,7 +29,9 @@ export async function truncateAll(pool: Pool): Promise<void> {
     `TRUNCATE audit_log, ledger_entries, transactions, account_balances,
               accounts, api_keys, tenants, idempotency_keys,
               payout_events, payouts, holds,
-              daily_ledger_entries, eod_state RESTART IDENTITY CASCADE`,
+              daily_ledger_entries, eod_state,
+              webhook_deliveries, webhook_subscriptions, outbox_events
+       RESTART IDENTITY CASCADE`,
   );
 }
 

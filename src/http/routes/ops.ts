@@ -2,7 +2,9 @@ import type { FastifyInstance } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { getAccountUnscoped } from "../../adapters/db/accounts.js";
+import { getDeliveryUnscoped, requeueDelivery } from "../../adapters/db/outbox.js";
 import { getPayoutUnscoped } from "../../adapters/db/payouts.js";
+import { dispatchOutbox } from "../../application/outbox.js";
 import { advancePayoutTx, reverseSettledPayoutTx } from "../../application/payouts.js";
 import { postMovementTx } from "../../application/post-movement.js";
 import type { AdjustableClock } from "../../config/clock.js";
@@ -14,6 +16,7 @@ import { PAYOUT_STATUSES } from "../../domain/payout.js";
 import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
 import { registerOpsClockRoutes } from "./ops-clock.js";
 import { serializeBalance, serializePayout } from "./payouts.js";
+import { serializeDelivery } from "./webhooks.js";
 
 export interface OpsRouteDeps {
   db: Pool;
@@ -39,6 +42,11 @@ const simulateCreditBody = z.object({
 
 const advanceBody = z.object({
   to: z.enum(PAYOUT_STATUSES).optional(),
+});
+
+const dispatchBody = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  tenant_id: z.string().uuid().optional(),
 });
 
 /**
@@ -230,4 +238,71 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
   });
 
   registerOpsClockRoutes(app, { env, clock });
+
+  /**
+   * Drain due deliveries across tenants (or one tenant). Like the clock routes this
+   * is a control-plane tick and is exempt from Idempotency-Key.
+   */
+  app.post("/ops/v1/outbox/dispatch", async (request, reply) => {
+    if (request.headers["x-ops-token"] !== env.opsDevToken) {
+      return reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "invalid ops token",
+          request_id: request.id,
+          details: null,
+        },
+      });
+    }
+
+    const body = dispatchBody.parse(request.body ?? {});
+    const summary = await dispatchOutbox(
+      { db, env },
+      { limit: body.limit, tenantId: body.tenant_id },
+    );
+    return { mode: MODE, dispatch: summary };
+  });
+
+  /** Re-arm a dead or failed delivery for another attempt. */
+  app.post<{ Params: { id: string } }>(
+    "/ops/v1/webhooks/deliveries/:id/replay",
+    async (request, reply) => {
+      if (request.headers["x-ops-token"] !== env.opsDevToken) {
+        return reply.status(401).send({
+          error: {
+            code: "unauthorized",
+            message: "invalid ops token",
+            request_id: request.id,
+            details: null,
+          },
+        });
+      }
+
+      const found = await getDeliveryUnscoped(db, request.params.id);
+      if (found === null) throw notFound("webhook delivery not found");
+      const key = requireIdempotencyKey(request);
+
+      const result = await withIdempotency(
+        {
+          db,
+          tenantId: found.tenantId,
+          key,
+          method: request.method,
+          route: request.routeOptions.url ?? request.url,
+          body: { delivery_id: request.params.id },
+        },
+        async (client) => {
+          const delivery = await requeueDelivery(client, found.tenantId, request.params.id);
+          if (delivery === null) throw notFound("webhook delivery not found");
+          return {
+            status: 200,
+            body: { mode: MODE, delivery: serializeDelivery(delivery) },
+          };
+        },
+      );
+
+      if (result.replayed) reply.header("idempotent-replayed", "true");
+      return reply.status(result.status).send(result.body);
+    },
+  );
 }

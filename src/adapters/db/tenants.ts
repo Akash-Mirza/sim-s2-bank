@@ -60,6 +60,9 @@ export async function createApiKey(
     "accounts:write",
     "payouts:read",
     "payouts:write",
+    "webhooks:read",
+    "webhooks:write",
+    "events:read",
   ];
   const result = await db.query<{ id: string }>(
     `INSERT INTO api_keys (tenant_id, prefix, secret_hash, scopes)

@@ -1,6 +1,6 @@
-# S2 — Bank Simulator Specification (v0.3.0-dev.0)
+# S2 — Bank Simulator Specification (v0.4.0-dev.0)
 
-Scope: phases 1–7 (`S2-01`…`S2-07`). This document is the source of truth for what
+Scope: phases 1–8 (`S2-01`…`S2-08`). This document is the source of truth for what
 the simulator must do; `openapi.yaml` and the remaining packets are not built yet.
 
 ## 1. Purpose and boundary
@@ -21,14 +21,17 @@ In scope now:
 - sequential end-of-day (EOD) close snapshots per account;
 - an adjustable simulator clock (`freeze`, `step`, `resume`) for deterministic
   demos and tests;
+- a transactional outbox: every money-changing write emits an event in the same
+  transaction, with signed webhook delivery, retry/backoff, dead-letter, replay and
+  a cursor pull API;
 - a double-entry ledger with immutable posted rows;
 - tenant resolution from an API key;
 - an audit trail for every posting, account opening, hold, payout transition and
   EOD close.
 
 Out of scope: real money, real PII, real bank connectivity, KYB (S3), FX (S9),
-cross-border (S10), beneficiary book, webhooks, failure scenarios, ops console
-(later S2 packets).
+cross-border (S10), beneficiary book, failure scenarios, ops console (later S2
+packets).
 
 ## 2. Money, ledger, hold and payout rules
 
@@ -99,6 +102,26 @@ balance, `:61:` value date + booking MMDD + `C`/`D` + comma-decimal amount +
 `NTRF` + reference, `:86:` narrative, and `:62F:` closing balance. The exact
 subfield layout is the simulator's stable contract, not a claim about any one bank.
 
+### 2.3 Outbox, webhooks and event pull
+
+| Rule | Requirement |
+|---|---|
+| Atomicity | the event row and every delivery row are written in the business transaction |
+| Event types | `credit.posted`, `reversal.posted`, `hold.created/released/captured`, `payout.created/validated/submitted/accepted/settled/cancelled/failed/returned`, `eod.closed` |
+| Filters | exact type, family (`payout.*`) or `*`; at most 32 filters per subscription |
+| URL policy | absolute http(s), no embedded credentials; plain http only for loopback or outside production |
+| Signing | `x-sim-signature: t=<unix>,v1=<hex HMAC-SHA256 of ${t}.${body}>` |
+| Secret at rest | `whsec_…` encrypted with AES-256-GCM using `WEBHOOK_SECRET_KEY` (or a key derived from `API_KEY_PEPPER`) |
+| Delivery | at-least-once, 5s timeout, 2xx = delivered, anything else = failed attempt |
+| Retry | exponential backoff `2^attempts` seconds, capped at 300s |
+| Dead-letter | after 5 attempts the delivery becomes `dead` and waits for an operator replay |
+| Concurrency | due rows are claimed with `FOR UPDATE SKIP LOCKED`; a crash re-queues stale `delivering` rows |
+| Pull | `GET /v1/events?after=<seq>` is the cursor alternative to webhooks |
+| Tenant scope | subscriptions, deliveries and pulled events are always filtered by the bearer tenant |
+
+The receiver envelope is `{"id","type","created_at","data"}`. `data` is the event
+payload; the same bytes are signed, so a receiver can verify before parsing.
+
 ## 3. Data model
 
 `0001_init.sql`: `tenants`, `api_keys`, `accounts`, `account_balances`,
@@ -113,6 +136,11 @@ subfield layout is the simulator's stable contract, not a claim about any one ba
 account/business date, with opening, closing, credits, debits, line count,
 checksum) and `eod_state` (last closed business date per tenant/account).
 
+`0005_outbox_webhooks.sql`: `outbox_events` (monotonic `seq` cursor, typed payload,
+`published_at`), `webhook_subscriptions` (URL, encrypted secret, event filters,
+status) and `webhook_deliveries` (attempts, `next_retry_at`, last status/error,
+signature, unique on `(subscription_id, event_id)`).
+
 - `accounts.iban` unique, 23-character UAE IBAN (`AE` + check + bank code + 16 digits).
 - `ledger_entries.direction` in `D`/`C`; `amount_minor > 0`; `currency = 'AED'`.
 - `ledger_entries.balance_after_minor` is stored for the customer leg only.
@@ -121,6 +149,11 @@ checksum) and `eod_state` (last closed business date per tenant/account).
 - `holds.status` in `active`, `released`, `expired`, `captured`.
 - `daily_ledger_entries` enforces `closing = opening + credits - debits` in the
   database and is unique on `(account_id, business_date)`.
+- `webhook_subscriptions` stores only the encrypted signing secret; the plaintext is
+  returned by the create call (and by an exact idempotent replay of it) and never
+  by a read.
+- `webhook_deliveries` is unique per `(subscription_id, event_id)`, so a retried
+  fan-out cannot double-create a delivery.
 - Financial foreign keys use `ON DELETE RESTRICT`; money is never cascade-deleted.
 
 ## 4. HTTP contract (delivered endpoints)
@@ -156,6 +189,14 @@ checksum) and `eod_state` (last closed business date per tenant/account).
 | POST | `/ops/v1/clock/freeze` | `x-ops-token` | freeze at `{at}` or now |
 | POST | `/ops/v1/clock/step` | `x-ops-token` | step by seconds/minutes/hours/days |
 | POST | `/ops/v1/clock/resume` | `x-ops-token` | resume the system clock |
+| POST | `/v1/webhooks` | bearer + `webhooks:write` | register a receiver, 201, returns the secret once |
+| GET | `/v1/webhooks` | bearer + `webhooks:read` | tenant subscriptions, never the secret |
+| DELETE | `/v1/webhooks/{id}` | bearer + `webhooks:write` | disable a subscription |
+| GET | `/v1/webhooks/{id}/deliveries` | bearer + `webhooks:read` | delivery attempts and outcomes |
+| GET | `/v1/events` | bearer + `events:read` | cursor pull, `after` = last `seq` |
+| POST | `/v1/outbox/dispatch` | bearer + `webhooks:write` | drain this tenant's due deliveries |
+| POST | `/ops/v1/outbox/dispatch` | `x-ops-token` | **dev only** drain across tenants |
+| POST | `/ops/v1/webhooks/deliveries/{id}/replay` | `x-ops-token` | **dev only** re-arm a delivery |
 
 Conventions: `Authorization: Bearer sk_sim_<prefix>_<secret>`; amounts as strings;
 every response contains `"mode":"sim"`; errors are
@@ -164,8 +205,9 @@ every response contains `"mode":"sim"`; errors are
 Writes: `POST` and `DELETE` require `Idempotency-Key` (1–255 printable ASCII).
 Same key + same body replays the stored response with `idempotent-replayed: true`.
 Same key + different body or route returns `409 idempotency_conflict`. Failed
-requests are not cached. Keys expire after 24 hours. The `/ops/v1/clock/*`
-control-plane routes are the one exception: stepping twice must step twice.
+requests are not cached. Keys expire after 24 hours. Control-plane ticks are the
+exception: `/ops/v1/clock/*` and the two outbox dispatch routes take no key,
+because a replay must actually run rather than return a stale summary.
 
 Errors used so far: `validation_error` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` 404, `idempotency_conflict` 409, `invalid_state_transition` 409,
@@ -177,8 +219,12 @@ Errors used so far: `validation_error` 400, `unauthorized` 401, `forbidden` 403,
 
 `DATABASE_URL`, `API_KEY_PEPPER` are required. `API_PORT` (4002), `HOST`,
 `NODE_ENV`, `LOG_LEVEL`, `SIM_CLOCK`, `ENABLE_DEV_OPS`, `OPS_DEV_TOKEN`,
-`SERVICE_VERSION`, `GIT_COMMIT` have defaults. Production refuses to boot with
-`ENABLE_DEV_OPS=true`.
+`WEBHOOK_SECRET_KEY`, `SERVICE_VERSION`, `GIT_COMMIT` have defaults. Production
+refuses to boot with `ENABLE_DEV_OPS=true`.
+
+`WEBHOOK_SECRET_KEY` encrypts stored signing secrets. When it is absent a distinct
+key is derived from `API_KEY_PEPPER`; setting it explicitly is recommended for a
+deployment so the two purposes do not share material.
 
 `SIM_CLOCK` starts the simulator clock frozen at an instant; the dev ops routes
 `/ops/v1/clock/freeze`, `/ops/v1/clock/step` and `/ops/v1/clock/resume` change it
@@ -221,8 +267,17 @@ at runtime. The business date and cut-off are always resolved in `Asia/Dubai`.
 | S2-T-054 | EOD defaults to the Asia/Dubai business date; weekends are refused | `test/integration/statements-eod.test.ts` |
 | S2-T-055 | the ops clock freezes, steps and resumes; business date stays correct | `test/unit/clock.test.ts`, integration |
 | S2-T-056 | EOD requires `accounts:write` and an `Idempotency-Key` | `test/integration/statements-eod.test.ts` |
+| S2-T-060 | filters match exact types, families and `*`; unknown filters are refused | `test/unit/webhook.test.ts` |
+| S2-T-061 | URL policy accepts https and loopback http, refuses credentials and remote http | `test/unit/webhook.test.ts` |
+| S2-T-062 | secrets round-trip through AES-256-GCM and fail on the wrong key or tampering | `test/unit/webhook.test.ts` |
+| S2-T-063 | `t=<unix>,v1=<hex>` verifies, detects body/secret changes and rejects stale timestamps | `test/unit/webhook.test.ts` |
+| S2-T-064 | a credit produces a delivered event whose receiver-verified signature matches | `test/integration/webhooks.test.ts` |
+| S2-T-065 | a 5xx retries with backoff and then delivers; a second early tick sends nothing | `test/integration/webhooks.test.ts` |
+| S2-T-066 | five failures dead-letter, and an ops replay re-arms and delivers | `test/integration/webhooks.test.ts` |
+| S2-T-067 | tenant isolation, invalid URLs/filters, scopes, idempotent registration and write-only secrets | `test/integration/webhooks.test.ts` |
+| S2-T-068 | the pull cursor pages events once each and disables delivery on subscription delete | `test/integration/webhooks.test.ts` |
 
 ## 7. Next packets
 
-`S2-08` outbox/webhooks, `S2-09` failure scenarios, `S2-10` ops console,
-`S2-11` OpenAPI + contract tests, `S2-12` deploy verification, `S2-13` release.
+`S2-09` failure scenarios, `S2-10` ops console, `S2-11` OpenAPI + contract tests,
+`S2-12` deploy verification, `S2-13` release.

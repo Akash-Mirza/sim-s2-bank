@@ -43,6 +43,7 @@ services:
       API_KEY_PEPPER: local-development-pepper-only
       ENABLE_DEV_OPS: "false"
       OPS_DEV_TOKEN: dev-ops-token
+      WEBHOOK_SECRET_KEY: local-webhook-secret-key-only
       TZ: Asia/Dubai
     ports:
       - "4002:4002"

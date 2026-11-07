@@ -14,7 +14,9 @@ import type { Queryable } from "../adapters/db/types.js";
 import { type Clock, businessDate } from "../config/clock.js";
 import { assertEodCloseable, buildEodSnapshot } from "../domain/eod.js";
 import { notFound } from "../domain/errors.js";
+import { formatAmountMinor } from "../domain/money.js";
 import type { Statement } from "../domain/statement.js";
+import { enqueueEventTx } from "./outbox.js";
 import { loadStatement } from "./statements.js";
 
 export interface CloseEodInput {
@@ -110,6 +112,25 @@ export async function closeEodTx(
       input.requestId ?? null,
     ],
   );
+
+  await enqueueEventTx(client, {
+    tenantId: input.tenantId,
+    accountId: input.accountId,
+    type: "eod.closed",
+    payload: {
+      eod_id: entry.id,
+      account_id: input.accountId,
+      business_date: entry.businessDate,
+      opening_balance: formatAmountMinor(entry.openingMinor),
+      closing_balance: formatAmountMinor(entry.closingMinor),
+      credits: formatAmountMinor(entry.creditsMinor),
+      debits: formatAmountMinor(entry.debitsMinor),
+      line_count: entry.lineCount,
+      checksum: entry.checksum,
+      closed_at: entry.closedAt,
+      closed_by: entry.closedBy,
+    },
+  });
 
   return { entry, state: nextState, statement };
 }

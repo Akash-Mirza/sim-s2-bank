@@ -25,11 +25,42 @@ import {
   validationError,
 } from "../domain/errors.js";
 import { isUaeIban, isValidIban } from "../domain/iban.js";
+import { formatAmountMinor } from "../domain/money.js";
 import { type PayoutStatus, assertPayoutTransition, nextPayoutStatus } from "../domain/payout.js";
+import { type EventType, validateEventType } from "../domain/webhook.js";
 import { createHoldTx, lockAccountBalance, releaseHoldTx } from "./holds.js";
+import { enqueueEventTx } from "./outbox.js";
 import { postMovementTx } from "./post-movement.js";
 
 const BIC_PATTERN = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
+
+/** Every payout state has a matching `payout.<state>` event. */
+function payoutEventType(status: PayoutStatus): EventType {
+  return validateEventType(`payout.${status}`);
+}
+
+function payoutPayload(payout: PayoutRecord) {
+  return {
+    payout_id: payout.id,
+    account_id: payout.accountId,
+    status: payout.status,
+    amount: formatAmountMinor(payout.amountMinor),
+    currency: payout.currency,
+    reference: payout.reference,
+    end_to_end_id: payout.endToEndId,
+    beneficiary: {
+      name: payout.beneficiaryName,
+      iban: payout.beneficiaryIban,
+      bic: payout.beneficiaryBic,
+    },
+    scheduled_for: payout.scheduledFor,
+    cutoff_at: payout.cutoffAt,
+    transaction_id: payout.transactionId,
+    hold_id: payout.holdId,
+    failure_code: payout.failureCode,
+    failure_reason: payout.failureReason,
+  };
+}
 
 export interface PayoutResult {
   payout: PayoutRecord;
@@ -129,6 +160,7 @@ export async function createPayoutTx(
     reference: payout.id,
     actor: input.actor,
     requestId: input.requestId,
+    suppressEvents: true,
   });
 
   await setPayoutHold(client, payout.id, reserved.hold.id);
@@ -155,8 +187,16 @@ export async function createPayoutTx(
     requestId: input.requestId,
   });
 
+  const created = { ...payout, holdId: reserved.hold.id };
+  await enqueueEventTx(client, {
+    tenantId: input.tenantId,
+    accountId: input.accountId,
+    type: "payout.created",
+    payload: payoutPayload(created),
+  });
+
   return {
-    payout: { ...payout, holdId: reserved.hold.id },
+    payout: created,
     events: [event],
     balance: reserved.balance,
   };
@@ -217,6 +257,21 @@ export async function advancePayoutTx(
     await setHoldStatus(client, hold.id, "captured", {
       capturedTransactionId: transactionId,
     });
+    await enqueueEventTx(client, {
+      tenantId: current.tenantId,
+      accountId: current.accountId,
+      type: "hold.captured",
+      payload: {
+        hold_id: hold.id,
+        account_id: current.accountId,
+        amount: formatAmountMinor(hold.amountMinor),
+        currency: hold.currency,
+        reason: hold.reason,
+        reference: hold.reference,
+        status: "captured",
+        transaction_id: transactionId,
+      },
+    });
     balance = movement.balance;
   }
 
@@ -230,6 +285,7 @@ export async function advancePayoutTx(
           actor: input.actor,
           requestId: input.requestId,
           reason: `payout_${to}`,
+          suppressEvents: true,
         });
         balance = released.balance;
       }
@@ -268,6 +324,13 @@ export async function advancePayoutTx(
     before: { status: current.status },
     after: { status: to },
     requestId: input.requestId,
+  });
+
+  await enqueueEventTx(client, {
+    tenantId: current.tenantId,
+    accountId: current.accountId,
+    type: payoutEventType(to),
+    payload: payoutPayload(updated),
   });
 
   return {
@@ -326,6 +389,17 @@ export async function reverseSettledPayoutTx(
     before: { status: current.status },
     after: { status: "returned", transaction_id: movement.transaction.id },
     requestId: input.requestId,
+  });
+
+  await enqueueEventTx(client, {
+    tenantId: current.tenantId,
+    accountId: current.accountId,
+    type: "payout.returned",
+    payload: {
+      ...payoutPayload(updated),
+      reversal_transaction_id: movement.transaction.id,
+      reversal_of: current.transactionId,
+    },
   });
 
   return {

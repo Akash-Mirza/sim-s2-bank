@@ -14,6 +14,8 @@ import {
   invalidStateTransition,
   validationError,
 } from "../domain/errors.js";
+import { formatAmountMinor } from "../domain/money.js";
+import { enqueueEventTx } from "./outbox.js";
 
 interface LockedBalanceRow {
   status: string;
@@ -103,6 +105,8 @@ export async function createHoldTx(
     expiresAt?: string;
     actor: string;
     requestId?: string;
+    /** Payout flows emit payout.* events and suppress the underlying hold event. */
+    suppressEvents?: boolean;
   },
 ): Promise<HoldResult> {
   if (input.amountMinor <= 0n) {
@@ -154,6 +158,25 @@ export async function createHoldTx(
     requestId: input.requestId,
   });
 
+  if (input.suppressEvents !== true) {
+    await enqueueEventTx(client, {
+      tenantId: input.tenantId,
+      accountId: input.accountId,
+      type: "hold.created",
+      payload: {
+        hold_id: hold.id,
+        account_id: input.accountId,
+        amount: formatAmountMinor(input.amountMinor),
+        currency: CURRENCY,
+        reason: input.reason,
+        reference: input.reference ?? null,
+        status: hold.status,
+        expires_at: hold.expiresAt,
+        available: formatAmountMinor(availableMinor(next)),
+      },
+    });
+  }
+
   return { hold, balance: { ...next, availableMinor: availableMinor(next) } };
 }
 
@@ -169,6 +192,7 @@ export async function releaseHoldTx(
     actor: string;
     requestId?: string;
     reason?: string;
+    suppressEvents?: boolean;
   },
 ): Promise<HoldResult> {
   const known = await getHold(client, input.tenantId, input.holdId);
@@ -220,6 +244,24 @@ export async function releaseHoldTx(
     },
     requestId: input.requestId,
   });
+
+  if (input.suppressEvents !== true) {
+    await enqueueEventTx(client, {
+      tenantId: input.tenantId,
+      accountId: hold.accountId,
+      type: "hold.released",
+      payload: {
+        hold_id: released.id,
+        account_id: hold.accountId,
+        amount: formatAmountMinor(hold.amountMinor),
+        currency: hold.currency,
+        reason: input.reason ?? "manual",
+        reference: hold.reference,
+        status: released.status,
+        available: formatAmountMinor(availableMinor(next)),
+      },
+    });
+  }
 
   return { hold: released, balance: { ...next, availableMinor: availableMinor(next) } };
 }
