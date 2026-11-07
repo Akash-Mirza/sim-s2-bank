@@ -1,6 +1,6 @@
-# S2 — Bank Simulator Specification (v0.2.0-dev.0)
+# S2 — Bank Simulator Specification (v0.3.0-dev.0)
 
-Scope: phases 1–6 (`S2-01`…`S2-06`). This document is the source of truth for what
+Scope: phases 1–7 (`S2-01`…`S2-07`). This document is the source of truth for what
 the simulator must do; `openapi.yaml` and the remaining packets are not built yet.
 
 ## 1. Purpose and boundary
@@ -16,12 +16,18 @@ In scope now:
 - simulated incoming credit with replay-safe writes;
 - holds: reserve available without moving the ledger, release, capture;
 - local AED payouts with a legal state machine, cut-off and settlement date;
+- statements for any booking-date range in JSON, CSV and MT940, with
+  opening/closing balances that must reconcile with the ledger;
+- sequential end-of-day (EOD) close snapshots per account;
+- an adjustable simulator clock (`freeze`, `step`, `resume`) for deterministic
+  demos and tests;
 - a double-entry ledger with immutable posted rows;
 - tenant resolution from an API key;
-- an audit trail for every posting, account opening, hold and payout transition.
+- an audit trail for every posting, account opening, hold, payout transition and
+  EOD close.
 
 Out of scope: real money, real PII, real bank connectivity, KYB (S3), FX (S9),
-cross-border (S10), beneficiary book, statements, webhooks, failure scenarios
+cross-border (S10), beneficiary book, webhooks, failure scenarios, ops console
 (later S2 packets).
 
 ## 2. Money, ledger, hold and payout rules
@@ -71,6 +77,28 @@ Illegal transitions return `409 invalid_state_transition` with `from`, `to` and
 `allowed`. A settled payout cannot be settled twice: the hold is captured, so a
 second settlement fails the hold guard.
 
+### 2.2 Statements, EOD and the simulator clock
+
+| Rule | Requirement |
+|---|---|
+| Statement range | inclusive booking dates; `from <= to`; at most 366 days |
+| Opening balance | signed sum of `customer_deposit` entries booked before `from` |
+| Closing balance | `opening + credits - debits`, derived in booking-date order |
+| Balance after | the statement's own running balance; stored ledger values are advisory |
+| Cache integrity | customer ledger and `account_balances.ledger_minor` must agree on every read |
+| Statement lines | one per posted transaction, in booking/posting order |
+| Formats | JSON, CSV and MT940 are three renderings of the same statement model |
+| EOD | one immutable snapshot per account and business date |
+| EOD sequence | the next close must be the next UAE business day; no repeats, no skips |
+| EOD today | defaults to the current Asia/Dubai business date; future dates are refused |
+| Clock | the server may be frozen at an instant and stepped forward; `SIM_CLOCK` starts it frozen |
+| Clock exception | `/ops/v1/clock/*` is control-plane and does not take `Idempotency-Key` |
+
+MT940 uses `:20:` reference, `:25:` IBAN, `:28C:` statement/page, `:60F:` opening
+balance, `:61:` value date + booking MMDD + `C`/`D` + comma-decimal amount +
+`NTRF` + reference, `:86:` narrative, and `:62F:` closing balance. The exact
+subfield layout is the simulator's stable contract, not a claim about any one bank.
+
 ## 3. Data model
 
 `0001_init.sql`: `tenants`, `api_keys`, `accounts`, `account_balances`,
@@ -81,12 +109,18 @@ second settlement fails the hold guard.
 
 `0003_payouts_holds.sql`: `holds`, `payouts`, `payout_events` (append-only).
 
+`0004_statements_eod.sql`: `daily_ledger_entries` (one immutable close snapshot per
+account/business date, with opening, closing, credits, debits, line count,
+checksum) and `eod_state` (last closed business date per tenant/account).
+
 - `accounts.iban` unique, 23-character UAE IBAN (`AE` + check + bank code + 16 digits).
 - `ledger_entries.direction` in `D`/`C`; `amount_minor > 0`; `currency = 'AED'`.
 - `ledger_entries.balance_after_minor` is stored for the customer leg only.
 - `payouts.status` is constrained to the state machine; `scheduled_for` and
   `cutoff_at` are computed at creation.
 - `holds.status` in `active`, `released`, `expired`, `captured`.
+- `daily_ledger_entries` enforces `closing = opening + credits - debits` in the
+  database and is unique on `(account_id, business_date)`.
 - Financial foreign keys use `ON DELETE RESTRICT`; money is never cascade-deleted.
 
 ## 4. HTTP contract (delivered endpoints)
@@ -113,6 +147,15 @@ second settlement fails the hold guard.
 | POST | `/ops/v1/accounts/{id}/simulate-credit` | `x-ops-token` | **dev only** |
 | POST | `/ops/v1/payouts/{id}/advance` | `x-ops-token` | advance one step or `{to}` |
 | POST | `/ops/v1/payouts/{id}/reverse` | `x-ops-token` | return settled funds |
+| GET | `/v1/accounts/{id}/statement` | bearer + `accounts:read` | `from`, `to`, `format=json\|csv\|mt940` |
+| GET | `/v1/accounts/{id}/statements/{date}/{format}` | bearer + `accounts:read` | daily statement convenience path |
+| POST | `/v1/accounts/{id}/eod/close` | bearer + `accounts:write` | close one business date, 201 |
+| GET | `/v1/accounts/{id}/eod` | bearer + `accounts:read` | EOD state + recent snapshots |
+| GET | `/v1/accounts/{id}/eod/{date}` | bearer + `accounts:read` | one EOD snapshot |
+| GET | `/ops/v1/clock` | `x-ops-token` | **dev only** clock state |
+| POST | `/ops/v1/clock/freeze` | `x-ops-token` | freeze at `{at}` or now |
+| POST | `/ops/v1/clock/step` | `x-ops-token` | step by seconds/minutes/hours/days |
+| POST | `/ops/v1/clock/resume` | `x-ops-token` | resume the system clock |
 
 Conventions: `Authorization: Bearer sk_sim_<prefix>_<secret>`; amounts as strings;
 every response contains `"mode":"sim"`; errors are
@@ -121,7 +164,8 @@ every response contains `"mode":"sim"`; errors are
 Writes: `POST` and `DELETE` require `Idempotency-Key` (1–255 printable ASCII).
 Same key + same body replays the stored response with `idempotent-replayed: true`.
 Same key + different body or route returns `409 idempotency_conflict`. Failed
-requests are not cached. Keys expire after 24 hours.
+requests are not cached. Keys expire after 24 hours. The `/ops/v1/clock/*`
+control-plane routes are the one exception: stepping twice must step twice.
 
 Errors used so far: `validation_error` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` 404, `idempotency_conflict` 409, `invalid_state_transition` 409,
@@ -136,8 +180,9 @@ Errors used so far: `validation_error` 400, `unauthorized` 401, `forbidden` 403,
 `SERVICE_VERSION`, `GIT_COMMIT` have defaults. Production refuses to boot with
 `ENABLE_DEV_OPS=true`.
 
-`SIM_CLOCK` freezes time for deterministic cut-off demos and tests; the business
-date and cut-off are always resolved in `Asia/Dubai`.
+`SIM_CLOCK` starts the simulator clock frozen at an instant; the dev ops routes
+`/ops/v1/clock/freeze`, `/ops/v1/clock/step` and `/ops/v1/clock/resume` change it
+at runtime. The business date and cut-off are always resolved in `Asia/Dubai`.
 
 ## 6. Acceptance tests (this release)
 
@@ -169,9 +214,15 @@ date and cut-off are always resolved in `Asia/Dubai`.
 | S2-T-046 | after cut-off the payout rolls to the next business day | `test/integration/payouts.test.ts` |
 | S2-T-047 | reversal posts a credit linked to the settled transaction | `test/integration/payouts.test.ts` |
 | S2-T-048 | `payouts:write` is required for payouts | `test/integration/payouts.test.ts` |
+| S2-T-050 | JSON, CSV and MT940 statements agree on opening, closing, credits and debits | `test/integration/statements-eod.test.ts` |
+| S2-T-051 | opening/closing carry across a date range and a statement reconciles line by line | `test/unit/statement.test.ts`, integration |
+| S2-T-052 | tenant isolation, reversed ranges and >366-day ranges are refused | `test/integration/statements-eod.test.ts` |
+| S2-T-053 | EOD closes once, replays with the same key, and refuses repeats and skips | `test/integration/statements-eod.test.ts` |
+| S2-T-054 | EOD defaults to the Asia/Dubai business date; weekends are refused | `test/integration/statements-eod.test.ts` |
+| S2-T-055 | the ops clock freezes, steps and resumes; business date stays correct | `test/unit/clock.test.ts`, integration |
+| S2-T-056 | EOD requires `accounts:write` and an `Idempotency-Key` | `test/integration/statements-eod.test.ts` |
 
 ## 7. Next packets
 
-`S2-07` statements + EOD, `S2-08` outbox/webhooks, `S2-09` failure scenarios,
-`S2-10` ops console, `S2-11` OpenAPI + contract tests, `S2-12` deploy verification,
-`S2-13` release.
+`S2-08` outbox/webhooks, `S2-09` failure scenarios, `S2-10` ops console,
+`S2-11` OpenAPI + contract tests, `S2-12` deploy verification, `S2-13` release.

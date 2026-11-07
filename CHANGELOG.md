@@ -3,6 +3,39 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [0.3.0-dev.0] — 2026-11-07
+
+Phase 7 of the S2 build (`S2-07`).
+
+### Added
+
+- `0004_statements_eod.sql`: immutable `daily_ledger_entries` snapshots and a
+  per-tenant/account `eod_state` pointer.
+- Statements for any booking-date range in JSON, CSV and MT940, all rendered from
+  one statement model with opening/closing balances checked against
+  `ledger_entries.balance_after_minor`.
+- Sequential EOD close (`POST /v1/accounts/{id}/eod/close`) with replay-safe
+  writes, per-account sequence, next-business-day enforcement, checksum and audit
+  row; EOD history and single-snapshot reads.
+- Adjustable simulator clock: `SIM_CLOCK` starts it frozen; dev ops routes
+  `GET /ops/v1/clock`, `POST /ops/v1/clock/freeze`, `step` and `resume`.
+- Unit tests for statement rendering/reconciliation, EOD sequencing and the clock;
+  integration tests for cross-format agreement, date ranges, tenant isolation,
+  EOD replay/sequence and clock-driven close dates.
+
+### Changed
+
+- `/ops/v1/clock/*` is deliberately exempt from `Idempotency-Key`; a step is
+  control-plane input, not a replayable business write.
+- Server composition uses the adjustable clock instead of an immutable fixed clock.
+
+### Known limits
+
+- A statement scans at most 366 days; CAMT.053/PDF are not built.
+- EOD is per account; a tenant with several accounts closes each one separately.
+- Hold expiry is still stored but not swept by a worker.
+- No webhooks/outbox, failure scenarios, ops console, OpenAPI, or live deploy yet.
+
 ## [0.2.0-dev.0] — 2026-11-07
 
 Phases 5–6 of the S2 build (`S2-05`, `S2-06`).
