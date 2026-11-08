@@ -54,7 +54,12 @@ describe("http surface", () => {
       expect(response.json().mode).toBe("sim");
     }
     const version = await app.inject({ method: "GET", url: "/version" });
-    expect(version.json().schema_version).toBe("0005_outbox_webhooks.sql");
+    const { readdirSync } = await import("node:fs");
+    const latestMigration = readdirSync("migrations")
+      .filter((name) => name.endsWith(".sql"))
+      .sort()
+      .at(-1);
+    expect(version.json().schema_version).toBe(latestMigration);
     expect(version.headers["x-request-id"]).toBeTruthy();
   });
 
@@ -150,7 +155,7 @@ describe("http surface", () => {
     expect(missing.json().error.code).toBe("not_found");
   });
 
-  it("hides ops routes when dev endpoints are disabled", async () => {
+  it("rejects the dev ops token when dev endpoints are disabled", async () => {
     const env: Env = {
       nodeEnv: "test",
       host: "127.0.0.1",
@@ -173,7 +178,8 @@ describe("http surface", () => {
         headers: { "x-ops-token": OPS_TOKEN },
         payload: { amount: "1.00" },
       });
-      expect(response.statusCode).toBe(404);
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error.code).toBe("unauthorized");
     } finally {
       await hardened.close();
     }
