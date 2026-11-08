@@ -72,6 +72,8 @@ export function serializePayout(payout: PayoutRecord) {
     },
     hold_id: payout.holdId,
     transaction_id: payout.transactionId,
+    settled_amount:
+      payout.settledAmountMinor === null ? null : formatAmountMinor(payout.settledAmountMinor),
     scheduled_for: payout.scheduledFor,
     cutoff_at: payout.cutoffAt,
     submitted_at: payout.submittedAt,

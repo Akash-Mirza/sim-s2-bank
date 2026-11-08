@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import { currentSchemaVersion } from "../../adapters/db/migrate.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
+import { SCENARIO_DESCRIPTIONS, SCENARIO_KINDS } from "../../domain/scenario.js";
 
 export function registerHealthRoutes(app: FastifyInstance, deps: { env: Env; db: Pool }): void {
   const { env, db } = deps;
@@ -40,6 +41,9 @@ export function registerHealthRoutes(app: FastifyInstance, deps: { env: Env; db:
     mode: MODE,
     version: env.version,
     server_time: new Date().toISOString(),
-    scenarios: [],
+    scenarios: SCENARIO_KINDS.map((kind) => ({
+      kind,
+      description: SCENARIO_DESCRIPTIONS[kind],
+    })),
   }));
 }

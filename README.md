@@ -8,10 +8,10 @@ double-entry ledger in fils, simulated incoming credit, replay-safe writes, hold
 local AED payouts with a UAE cut-off, statements, and signed webhooks. Every
 response carries `"mode":"sim"` and the data is synthetic.
 
-Status: **phases 1–8 of 13 shipped** (`v0.4.0-dev.0`) — scaffold and deploy
+Status: **phases 1–9 of 13 shipped** (`v0.5.0-dev.0`) — scaffold and deploy
 contract, schema/migrations/seed, double-entry ledger, accounts and balances,
-idempotency, holds and payouts, statements/EOD and the adjustable ops clock, and
-the transactional outbox with signed webhook delivery.
+idempotency, holds and payouts, statements/EOD and the adjustable ops clock, the
+transactional outbox with signed webhook delivery, and armed failure scenarios.
 
 Production demo: **https://sim-s2-bank.vercel.app** (Vercel Functions in `sin1`,
 Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
@@ -28,8 +28,9 @@ Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
 | 6 | `S2-06` | Holds (reserve/release/capture), payouts with the ten-state machine, UAE business calendar + 15:00 cut-off, ops advance/reverse |
 | 7 | `S2-07` | Statements (JSON/CSV/MT940) for any booking-date range, sequential EOD snapshots, adjustable ops clock (freeze/step/resume) |
 | 8 | `S2-08` | Transactional outbox, webhook subscriptions, HMAC-signed at-least-once delivery, retry/backoff, dead-letter, ops replay, event pull cursor |
+| 9 | `S2-09` | Failure scenarios: underpaid settlement, sanctions hold, rail timeout, return before settlement; tenant and ops scenario routes |
 
-Not built yet: failure scenarios, beneficiary book, ops console, OpenAPI, release.
+Not built yet: beneficiary book, ops console, OpenAPI, release.
 
 ## Run locally
 
@@ -94,6 +95,16 @@ curl -s localhost:4002/v1/webhooks/<subscription>/deliveries -H "Authorization: 
 
 # or pull events instead of receiving them
 curl -s "localhost:4002/v1/events?after=0&limit=50" -H "Authorization: Bearer <key>"
+
+# arm a failure scenario on a payout, then advance it into the fault
+curl -s -X POST localhost:4002/v1/scenarios \
+  -H "Authorization: Bearer <key>" -H 'content-type: application/json' \
+  -H 'Idempotency-Key: scenario-1' \
+  -d '{"payout_id":"<payout>","kind":"underpaid","shortfall":"25.00"}'
+curl -s localhost:4002/v1/scenarios -H "Authorization: Bearer <key>"
+# underpaid -> settled with settled_amount 225.00
+# sanctions_hold -> 423 payment_held; bank_timeout -> 504 rail_timeout
+# returned -> the payout becomes returned and the hold is released
 ```
 
 A receiver gets `x-sim-signature: t=<unix>,v1=<hex>`, where the hex is
@@ -153,7 +164,7 @@ TEST_DATABASE_URL=postgres://sim_s2:sim_s2@localhost:5435/sim_s2_test pnpm test:
 
 ```text
 src/
-├── domain/        pure money, IBAN, ledger, balance, calendar, payout, statement, EOD, webhook rules
+├── domain/        pure money, IBAN, ledger, balance, calendar, payout, statement, EOD, webhook, scenario rules
 ├── application/   use cases: accounts, postings, holds, payouts, statements, EOD, outbox
 ├── adapters/      Postgres, migrations, crypto (API keys, webhook secrets/HMAC)
 ├── http/          routes, auth, idempotency, error mapping, composition root
@@ -179,6 +190,7 @@ vercel.json        Vercel build, rewrite and function-region config
 - EOD is sequential: no repeats, no skipped business days.
 - An event is written in the same transaction as the money it describes.
 - Webhook delivery is at-least-once and signed; retries are bounded, then dead-lettered.
+- A failure scenario bends or refuses one existing payout transition; it never adds a parallel state.
 - The tenant comes from the API key, never from the request body.
 - No secrets, no real PII, no real bank connectivity.
 

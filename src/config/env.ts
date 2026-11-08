@@ -16,7 +16,7 @@ const rawEnvSchema = z
     API_KEY_PEPPER: z.string().min(16),
     // Optional dedicated key for encrypting webhook signing secrets at rest.
     WEBHOOK_SECRET_KEY: z.string().min(16).optional(),
-    SERVICE_VERSION: z.string().min(1).default("0.4.0-dev.0"),
+    SERVICE_VERSION: z.string().min(1).default("0.5.0-dev.0"),
     GIT_COMMIT: z.string().min(1).default("dev"),
   })
   .superRefine((value, ctx) => {

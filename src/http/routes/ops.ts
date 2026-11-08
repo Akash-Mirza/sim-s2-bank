@@ -7,6 +7,7 @@ import { getPayoutUnscoped } from "../../adapters/db/payouts.js";
 import { dispatchOutbox } from "../../application/outbox.js";
 import { advancePayoutTx, reverseSettledPayoutTx } from "../../application/payouts.js";
 import { postMovementTx } from "../../application/post-movement.js";
+import { armScenarioTx, listEveryScenario } from "../../application/scenarios.js";
 import type { AdjustableClock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
@@ -16,6 +17,7 @@ import { PAYOUT_STATUSES } from "../../domain/payout.js";
 import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
 import { registerOpsClockRoutes } from "./ops-clock.js";
 import { serializeBalance, serializePayout } from "./payouts.js";
+import { scenarioArmBody, scenarioListQuery, serializeScenario } from "./scenarios.js";
 import { serializeDelivery } from "./webhooks.js";
 
 export interface OpsRouteDeps {
@@ -305,4 +307,72 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
       return reply.status(result.status).send(result.body);
     },
   );
+
+  /** Arm a failure scenario for any tenant's payout (the console's Scenarios tab). */
+  app.post("/ops/v1/scenarios", async (request, reply) => {
+    if (request.headers["x-ops-token"] !== env.opsDevToken) {
+      return reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "invalid ops token",
+          request_id: request.id,
+          details: null,
+        },
+      });
+    }
+
+    const body = scenarioArmBody.parse(request.body ?? {});
+    const shortfallMinor =
+      body.shortfall === undefined ? undefined : parseAmountMinor(body.shortfall);
+    const key = requireIdempotencyKey(request);
+
+    const found = await getPayoutUnscoped(db, body.payout_id);
+    if (found === null) throw notFound("payout not found");
+
+    const result = await withIdempotency(
+      {
+        db,
+        tenantId: found.tenantId,
+        key,
+        method: request.method,
+        route: request.routeOptions.url ?? request.url,
+        body,
+      },
+      async (client) => {
+        const scenario = await armScenarioTx(client, {
+          tenantId: found.tenantId,
+          payoutId: found.id,
+          kind: body.kind,
+          shortfallMinor,
+          actor: "ops:dev",
+          requestId: request.id,
+        });
+
+        return {
+          status: 201,
+          body: { mode: MODE, scenario: serializeScenario(scenario) },
+        };
+      },
+    );
+
+    if (result.replayed) reply.header("idempotent-replayed", "true");
+    return reply.status(result.status).send(result.body);
+  });
+
+  app.get("/ops/v1/scenarios", async (request, reply) => {
+    if (request.headers["x-ops-token"] !== env.opsDevToken) {
+      return reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "invalid ops token",
+          request_id: request.id,
+          details: null,
+        },
+      });
+    }
+
+    const query = scenarioListQuery.parse(request.query ?? {});
+    const scenarios = await listEveryScenario(db, { status: query.status, limit: query.limit });
+    return { mode: MODE, data: scenarios.map(serializeScenario) };
+  });
 }

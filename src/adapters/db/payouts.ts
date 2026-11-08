@@ -39,6 +39,8 @@ export interface PayoutRecord {
     | "cancelled";
   holdId: string | null;
   transactionId: string | null;
+  /** What the beneficiary actually received; equal to amountMinor unless underpaid. */
+  settledAmountMinor: bigint | null;
   failureCode: string | null;
   failureReason: string | null;
   scheduledFor: string;
@@ -89,6 +91,7 @@ interface PayoutRow {
   status: PayoutRecord["status"];
   hold_id: string | null;
   transaction_id: string | null;
+  settled_amount_minor: string | null;
   failure_code: string | null;
   failure_reason: string | null;
   scheduled_for: string;
@@ -114,7 +117,7 @@ const HOLD_COLUMNS = `id, tenant_id, account_id, amount_minor, currency, reason,
 
 const PAYOUT_COLUMNS = `id, tenant_id, account_id, amount_minor, currency, reference, end_to_end_id,
   beneficiary_name, beneficiary_iban, beneficiary_bic, status, hold_id, transaction_id,
-  failure_code, failure_reason, scheduled_for::text AS scheduled_for, cutoff_at,
+  settled_amount_minor, failure_code, failure_reason, scheduled_for::text AS scheduled_for, cutoff_at,
   submitted_at, settled_at, created_at, updated_at`;
 
 const EVENT_COLUMNS = "id, payout_id, from_status, to_status, actor, meta, at";
@@ -152,6 +155,7 @@ function mapPayout(row: PayoutRow): PayoutRecord {
     status: row.status,
     holdId: row.hold_id,
     transactionId: row.transaction_id,
+    settledAmountMinor: row.settled_amount_minor === null ? null : BigInt(row.settled_amount_minor),
     failureCode: row.failure_code,
     failureReason: row.failure_reason,
     scheduledFor: row.scheduled_for,
@@ -348,6 +352,7 @@ export async function updatePayout(
     submittedAt?: string;
     settledAt?: string;
     transactionId?: string;
+    settledAmountMinor?: bigint;
     failureCode?: string;
     failureReason?: string;
   },
@@ -360,6 +365,7 @@ export async function updatePayout(
             transaction_id = COALESCE($5, transaction_id),
             failure_code = $6,
             failure_reason = $7,
+            settled_amount_minor = COALESCE($8::bigint, settled_amount_minor),
             updated_at = now()
       WHERE id = $1
       RETURNING ${PAYOUT_COLUMNS}`,
@@ -371,6 +377,7 @@ export async function updatePayout(
       input.transactionId ?? null,
       input.failureCode ?? null,
       input.failureReason ?? null,
+      input.settledAmountMinor === undefined ? null : input.settledAmountMinor.toString(),
     ],
   );
   const row = result.rows[0];

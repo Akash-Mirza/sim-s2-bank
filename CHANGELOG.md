@@ -3,6 +3,46 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [0.5.0-dev.0] — 2026-11-08
+
+Phase 9 of the S2 build (`S2-09`).
+
+### Added
+
+- `0006_failure_scenarios.sql`: `simulator_scenarios` (one armed fault per payout,
+  enforced by a partial unique index) and `payouts.settled_amount_minor`.
+- Four failure scenarios: `underpaid`, `sanctions_hold`, `bank_timeout` and
+  `returned`. Each bends or refuses exactly one payout transition instead of
+  adding a parallel state machine.
+- `underpaid` settles the payout for `amount - shortfall`, releases the full
+  reserve and records `settled_amount` plus `failure_code: underpaid`.
+- `sanctions_hold` refuses `accepted`/`settled` with `423 payment_held` and stays
+  armed until the operator disarms it.
+- `bank_timeout` refuses `submitted -> accepted` with `504 rail_timeout`, leaving
+  the payout `submitted` and the hold active for a retry.
+- `returned` redirects `submitted -> accepted` into `submitted -> returned`, which
+  releases the reserve without moving the ledger.
+- Tenant routes `POST/GET /v1/scenarios` and `DELETE /v1/scenarios/{id}`; ops
+  routes `POST/GET /ops/v1/scenarios`; `/v1/meta` now lists the scenario kinds.
+- Scenarios are consumed inside the money transaction, so a fault fires once and
+  its audit row (`scenario.armed` / `scenario.disarmed`) commits with it.
+- Unit tests for the resolution rules and integration tests for underpaid,
+  sanctions hold, timeout, return, disarm and tenant isolation.
+
+### Changed
+
+- Reversal of a settled payout now reverses `settled_amount_minor`, not the
+  original payout amount, so an underpaid payout cannot be reversed for more than
+  it paid.
+- Version is `0.5.0-dev.0`.
+
+### Known limits
+
+- Scenarios are armed per payout, not per account or per tenant.
+- Only one scenario may be armed on a payout at a time.
+- Nothing auto-advances payouts: a demo still calls `advance` or the console.
+- The ops surface is still the shared `x-ops-token` until `S2-10`.
+
 ## [0.4.0-dev.0] — 2026-11-07
 
 Phase 8 of the S2 build (`S2-08`).
