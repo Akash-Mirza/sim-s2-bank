@@ -125,6 +125,19 @@ export async function getScenario(
   return row === undefined ? null : mapScenario(row);
 }
 
+/** Ops-side lookup: the caller has already been authorized by the ops session. */
+export async function getScenarioUnscoped(
+  db: Queryable,
+  scenarioId: string,
+): Promise<ScenarioRecord | null> {
+  const result = await db.query<ScenarioRow>(
+    `SELECT ${SCENARIO_COLUMNS} FROM simulator_scenarios WHERE id = $1`,
+    [scenarioId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : mapScenario(row);
+}
+
 export async function listScenarios(
   db: Queryable,
   tenantId: string,

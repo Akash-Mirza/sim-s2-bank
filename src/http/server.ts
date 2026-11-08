@@ -5,8 +5,11 @@ import { adjustableClock } from "../config/clock.js";
 import type { Env } from "../config/env.js";
 import { errorBody, handleError } from "./errors.js";
 import { registerAccountRoutes } from "./routes/accounts.js";
+import { registerConsoleRoutes } from "./routes/console.js";
 import { registerEodRoutes } from "./routes/eod.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerOpsAuthRoutes } from "./routes/ops-auth.js";
+import { registerOpsReadRoutes } from "./routes/ops-read.js";
 import { registerOpsRoutes } from "./routes/ops.js";
 import { registerPayoutRoutes } from "./routes/payouts.js";
 import { registerScenarioRoutes } from "./routes/scenarios.js";
@@ -49,6 +52,9 @@ export function buildServer(env: Env): FastifyInstance {
   registerEodRoutes(app, { db, env, clock });
   registerWebhookRoutes(app, { db, env });
   registerScenarioRoutes(app, { db, env, clock });
+  registerOpsAuthRoutes(app, { db, env });
+  registerOpsReadRoutes(app, { db, env });
+  registerConsoleRoutes(app, { env });
   registerOpsRoutes(app, { db, env, clock });
 
   return app;

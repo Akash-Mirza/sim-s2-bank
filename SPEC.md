@@ -1,6 +1,6 @@
-# S2 — Bank Simulator Specification (v0.5.0-dev.0)
+# S2 — Bank Simulator Specification (v0.6.0-dev.0)
 
-Scope: phases 1–9 (`S2-01`…`S2-09`). This document is the source of truth for what
+Scope: phases 1–10 (`S2-01`…`S2-10`). This document is the source of truth for what
 the simulator must do; `openapi.yaml` and the remaining packets are not built yet.
 
 Live deployment: `https://sim-s2-bank.vercel.app` (Vercel Functions `sin1` + Neon
@@ -32,7 +32,9 @@ In scope now:
 - an audit trail for every posting, account opening, hold, payout transition and
   EOD close;
 - armed failure scenarios (`underpaid`, `sanctions_hold`, `bank_timeout`,
-  `returned`) that bend or refuse exactly one payout transition.
+  `returned`) that bend or refuse exactly one payout transition;
+- ops sessions with roles (`viewer`/`operator`/`admin`) and an ops console that
+  drives the simulator without `curl`.
 
 Out of scope: real money, real PII, real bank connectivity, KYB (S3), FX (S9),
 cross-border (S10), beneficiary book, ops console (later S2 packets).
@@ -232,8 +234,18 @@ shortfall, `armed`/`consumed`/`disarmed`, one armed row per payout) and
 | POST | `/v1/scenarios` | bearer + `payouts:write` | arm a failure scenario on a payout, 201 |
 | GET | `/v1/scenarios` | bearer + `payouts:read` | tenant scenarios, newest first |
 | DELETE | `/v1/scenarios/{id}` | bearer + `payouts:write` | disarm an armed scenario |
-| POST | `/ops/v1/scenarios` | `x-ops-token` | **dev only** arm for any payout |
-| GET | `/ops/v1/scenarios` | `x-ops-token` | **dev only** list across tenants |
+| POST | `/ops/v1/scenarios` | ops session | arm for any payout |
+| GET | `/ops/v1/scenarios` | ops session | list across tenants |
+| DELETE | `/ops/v1/scenarios/{id}` | ops session | disarm an armed scenario |
+| POST | `/ops/v1/auth/login` | none | email + password → session token, TTL 12h |
+| POST | `/ops/v1/auth/logout` | ops session | revoke the calling session |
+| GET | `/ops/v1/auth/me` | ops session | caller identity, role and channel |
+| GET | `/ops/v1/accounts` | ops session | every tenant's accounts with balances |
+| GET | `/ops/v1/payouts` | ops session | every tenant's payouts, optional status filter |
+| GET | `/ops/v1/audit` | ops session | recent audit rows across tenants |
+| GET | `/ops/v1/webhooks/deliveries` | ops session | recent deliveries across tenants |
+| GET | `/ops/console` | none | ops console HTML page (session inside) |
+| GET | `/ops` | none | redirect to `/ops/console` |
 
 Conventions: `Authorization: Bearer sk_sim_<prefix>_<secret>`; amounts as strings;
 every response contains `"mode":"sim"`; errors are
@@ -256,8 +268,13 @@ Errors used so far: `validation_error` 400, `unauthorized` 401, `forbidden` 403,
 
 `DATABASE_URL`, `API_KEY_PEPPER` are required. `API_PORT` (4002), `HOST`,
 `NODE_ENV`, `LOG_LEVEL`, `SIM_CLOCK`, `ENABLE_DEV_OPS`, `OPS_DEV_TOKEN`,
-`WEBHOOK_SECRET_KEY`, `SERVICE_VERSION`, `GIT_COMMIT` have defaults. Production
-refuses to boot with `ENABLE_DEV_OPS=true`.
+`OPS_SESSION_TTL_HOURS` (12), `WEBHOOK_SECRET_KEY`, `SERVICE_VERSION`,
+`GIT_COMMIT` have defaults. Production refuses to boot with `ENABLE_DEV_OPS=true`.
+
+The shared `x-ops-token` is accepted only while `ENABLE_DEV_OPS=true`. In a
+production-shaped process the ops surface is session-only: `POST
+/ops/v1/auth/login` mints an `ops_<prefix>_<secret>` token, stored as
+`sha256(pepper:ops-session:secret)` with an expiry and a revocation timestamp.
 
 `WEBHOOK_SECRET_KEY` encrypts stored signing secrets. When it is absent a distinct
 key is derived from `API_KEY_PEPPER`; setting it explicitly is recommended for a
@@ -325,7 +342,19 @@ at runtime. The business date and cut-off are always resolved in `Asia/Dubai`.
 | S2-T-064 | one armed scenario per payout; disarm; terminal payouts refuse scenarios | `test/integration/scenarios.test.ts` |
 | S2-T-065 | scenario resolution rules, default shortfall and guards | `test/unit/scenario.test.ts` |
 
+### 6.2 Ops session and console acceptance tests (`S2-10`)
+
+| ID | Test | Where |
+|---|---|---|
+| S2-T-070 | login exchanges email + password for `ops_` token; password never echoed | `test/integration/ops-console.test.ts` |
+| S2-T-071 | wrong password and unknown email return the identical 401 | `test/integration/ops-console.test.ts` |
+| S2-T-072 | logout revokes the session; `/auth/me` then returns 401 | `test/integration/ops-console.test.ts` |
+| S2-T-073 | `viewer` can read and cannot write; `operator` can write | `test/integration/ops-console.test.ts` |
+| S2-T-074 | audit actor is `ops:<email>`, not `ops:dev` | `test/integration/ops-console.test.ts` |
+| S2-T-075 | with dev ops off, sessions work and `x-ops-token` gets 401 | `test/integration/ops-console.test.ts` |
+| S2-T-076 | console HTML served unauthenticated; `/ops/v1/audit` needs a session | `test/integration/ops-console.test.ts` |
+| S2-T-077 | scrypt hash/verify, malformed hash, token regex, pepper-salted hash | `test/unit/ops-auth.test.ts` |
+
 ## 7. Next packets
 
-`S2-10` ops console, `S2-11` OpenAPI + contract tests, `S2-12` deploy
-verification, `S2-13` release.
+`S2-11` OpenAPI + contract tests, `S2-12` deploy verification, `S2-13` release.

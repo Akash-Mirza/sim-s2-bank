@@ -127,6 +127,18 @@ export async function getAccountUnscoped(
   return { account: mapAccount(row), balance: mapBalance(row) };
 }
 
+/** Ops-side list: the console inspects every tenant's accounts. */
+export async function listAccountsUnscoped(
+  db: Queryable,
+  limit: number,
+): Promise<AccountWithBalance[]> {
+  const result = await db.query<JoinedRow>(
+    `${ACCOUNT_WITH_BALANCE_SELECT} ORDER BY a.opened_at DESC LIMIT $1`,
+    [limit],
+  );
+  return result.rows.map((row) => ({ account: mapAccount(row), balance: mapBalance(row) }));
+}
+
 export async function listAccounts(db: Queryable, tenantId: string): Promise<AccountWithBalance[]> {
   const result = await db.query<JoinedRow>(
     `${ACCOUNT_WITH_BALANCE_SELECT} WHERE a.tenant_id = $1 ORDER BY a.opened_at ASC`,

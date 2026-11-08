@@ -3,6 +3,53 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [0.6.0-dev.0] — 2026-11-08
+
+Phase 10 of the S2 build (`S2-10`).
+
+### Added
+
+- `0007_ops_sessions.sql`: `ops_users` (email, display name, scrypt password hash,
+  role, status) and `ops_sessions` (token prefix, hash, expiry, revocation).
+- Ops sessions: `POST /ops/v1/auth/login`, `POST /ops/v1/auth/logout`,
+  `GET /ops/v1/auth/me`. Tokens are `ops_<prefix>_<secret>`, stored as
+  `sha256(pepper:ops-session:secret)` with a 12-hour default TTL
+  (`OPS_SESSION_TTL_HOURS`).
+- Roles: `viewer` is read-only, `operator` may change state, `admin` may manage
+  users. The guard enforces the role, so individual routes do not.
+- `requireOps`: one guard for every `/ops/v1` route. Bearer sessions work in
+  production; the shared `x-ops-token` works only where `ENABLE_DEV_OPS` is true,
+  which production already forbids at boot.
+- Ops console at `GET /ops/console` (and `/ops` → redirect): login, Accounts,
+  Payouts, Scenarios, Webhooks and Audit tabs, served by the API as one HTML page
+  so it ships through the same Vercel function.
+- Ops read routes for the console: `GET /ops/v1/accounts`, `/ops/v1/payouts`,
+  `/ops/v1/audit`, `/ops/v1/webhooks/deliveries`.
+- `DELETE /ops/v1/scenarios/{id}` so an operator can disarm a fault.
+- Ops writes now record `ops:<email>` as the audit actor instead of `ops:dev`.
+- `pnpm ops:user create|list` CLI (password from `--password` or
+  `OPS_USER_PASSWORD`, never printed).
+- Unit tests for scrypt hashing and token parsing; integration tests for login,
+  logout, roles, production-mode sessions and the console page.
+
+### Changed
+
+- The ops surface no longer depends on `ENABLE_DEV_OPS` in production: a deployed
+  simulator is operable with named users and roles, which was the blocker recorded
+  in A9/A11.
+- Payout and scenario ops actions now use the session identity for the payout event
+  actor instead of `ops:dev`.
+- Version is `0.6.0-dev.0`.
+
+### Known limits
+
+- No SSO, MFA, login throttling or per-device session management.
+- The console page is public HTML; every read behind it requires a session.
+- `admin` exists for user management but the user-management routes are not built;
+  users are created with the CLI.
+- Nothing auto-advances payouts or drains the outbox; the console still triggers
+  both.
+
 ## [0.5.0-dev.0] — 2026-11-08
 
 Phase 9 of the S2 build (`S2-09`).
