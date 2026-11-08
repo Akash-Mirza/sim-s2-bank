@@ -8,11 +8,12 @@ double-entry ledger in fils, simulated incoming credit, replay-safe writes, hold
 local AED payouts with a UAE cut-off, statements, and signed webhooks. Every
 response carries `"mode":"sim"` and the data is synthetic.
 
-Status: **phases 1–10 of 13 shipped** (`v0.6.0-dev.0`) — scaffold and deploy
+Status: **phases 1–11 of 13 shipped** (`v0.7.0-dev.0`) — scaffold and deploy
 contract, schema/migrations/seed, double-entry ledger, accounts and balances,
 idempotency, holds and payouts, statements/EOD and the adjustable ops clock, the
-transactional outbox with signed webhook delivery, armed failure scenarios, and the
-ops console with real session auth.
+transactional outbox with signed webhook delivery, armed failure scenarios, the ops
+console with real session auth, and the generated OpenAPI contract with contract
+tests.
 
 Production demo: **https://sim-s2-bank.vercel.app** (Vercel Functions in `sin1`,
 Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
@@ -31,8 +32,9 @@ Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
 | 8 | `S2-08` | Transactional outbox, webhook subscriptions, HMAC-signed at-least-once delivery, retry/backoff, dead-letter, ops replay, event pull cursor |
 | 9 | `S2-09` | Failure scenarios: underpaid settlement, sanctions hold, rail timeout, return before settlement; tenant and ops scenario routes |
 | 10 | `S2-10` | Ops users (scrypt), sessions with roles (viewer/operator/admin), session guard replacing the dev token in production, and the `/ops/console` UI |
+| 11 | `S2-11` | Contract as code: 53-route table, generated `openapi.yaml` and `api-types.ts`, contract tests for route parity, idempotency coverage and drift |
 
-Not built yet: beneficiary book, OpenAPI and contract tests, release.
+Not built yet: beneficiary book, deploy verification, release.
 
 ## Run locally
 
@@ -171,9 +173,17 @@ migrations and seeding. `ENABLE_DEV_OPS=true` is rejected at boot when
 ```bash
 pnpm lint
 pnpm typecheck
-pnpm test                 # unit only, no database
+pnpm test                 # unit + contract tests, no database
+pnpm test:contract        # contract tests only
 pnpm test:integration     # needs TEST_DATABASE_URL
+pnpm openapi              # regenerate openapi.yaml + src/contracts/api-types.ts
+pnpm openapi:check        # fail when the generated contract is stale
 ```
+
+The contract is code: `src/contracts/spec.ts` is the source of truth, and
+`pnpm openapi` derives `openapi.yaml` and `src/contracts/api-types.ts` from it. A
+route that is missing from the table (or declared but not registered) fails
+`pnpm test`.
 
 Integration tests refuse to run without `TEST_DATABASE_URL` and refuse a URL that
 does not look like a test database.
@@ -193,8 +203,10 @@ src/
 ├── adapters/      Postgres, migrations, crypto (API keys, webhook secrets/HMAC)
 ├── http/          routes (tenant, ops, console), auth, ops sessions, idempotency, errors
 ├── config/        env validation, adjustable clock
-└── cli/           migrate, seed, reset (built into dist for compose)
+├── cli/           migrate, seed, reset, ops-user, openapi (built into dist for compose)
+└── contracts/     route table + schemas (source of truth), YAML/TS codegen
 migrations/        numbered plain SQL
+openapi.yaml       generated contract (do not edit)
 test/unit          fast rules tests
 test/integration   real Postgres tests (webhooks use a real local receiver)
 api/index.ts       Vercel Node handler
@@ -217,6 +229,7 @@ vercel.json        Vercel build, rewrite and function-region config
 - A failure scenario bends or refuses one existing payout transition; it never adds a parallel state.
 - The tenant comes from the API key, never from the request body.
 - An ops action names a person (`ops:<email>`) and a role; the shared dev token is local only.
+- The contract is generated from code and verified by a test; a route without a spec entry cannot ship.
 - No secrets, no real PII, no real bank connectivity.
 
 See `SPEC.md` for the contract, `CHANGELOG.md` for what changed per release, and

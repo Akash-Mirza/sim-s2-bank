@@ -16,6 +16,13 @@
     }
   },
   "files": {
-    "ignore": ["dist", "node_modules", "coverage", "pnpm-lock.yaml", ".vercel"]
+    "ignore": [
+      "dist",
+      "node_modules",
+      "coverage",
+      "pnpm-lock.yaml",
+      ".vercel",
+      "src/contracts/api-types.ts"
+    ]
   }
 }
