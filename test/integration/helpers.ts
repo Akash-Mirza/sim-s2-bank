@@ -30,7 +30,8 @@ export async function truncateAll(pool: Pool): Promise<void> {
               accounts, api_keys, tenants, idempotency_keys,
               payout_events, payouts, holds,
               daily_ledger_entries, eod_state,
-              webhook_deliveries, webhook_subscriptions, outbox_events
+              webhook_deliveries, webhook_subscriptions, outbox_events,
+              simulator_scenarios, ops_sessions, ops_users
        RESTART IDENTITY CASCADE`,
   );
 }

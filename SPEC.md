@@ -1,11 +1,13 @@
-# S2 — Bank Simulator Specification (v0.7.0-dev.0)
+# S2 — Bank Simulator Specification (v0.8.0-dev.0)
 
-Scope: phases 1–11 (`S2-01`…`S2-11`). `openapi.yaml` is generated from
+Scope: phases 1–12 (`S2-01`…`S2-12`). `openapi.yaml` is generated from
 `src/contracts/spec.ts` and describes every route; this document explains the rules
-behind it. `S2-12` and `S2-13` are not built yet.
+behind it. `S2-13` (release) is not built yet.
 
 Live deployment: `https://sim-s2-bank.vercel.app` (Vercel Functions `sin1` + Neon
-Postgres `ap-southeast-1`, schema `0005_outbox_webhooks.sql`, dev-ops disabled).
+Postgres `ap-southeast-1`, dev-ops disabled). Production still runs
+`v0.4.0-dev.0` with schema `0005_outbox_webhooks.sql`; the `0.8.0` cutover needs
+`0006`/`0007` applied to Neon first.
 
 ## 1. Purpose and boundary
 
@@ -368,4 +370,5 @@ at runtime. The business date and cut-off are always resolved in `Asia/Dubai`.
 
 ## 7. Next packets
 
-`S2-12` deploy verification, `S2-13` release.
+`S2-13` release — blocked on the production cutover: apply `0006`/`0007` to Neon,
+deploy `v0.8.0-dev.0`, then smoke the live URL.

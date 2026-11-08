@@ -3,6 +3,42 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [0.8.0-dev.0] — 2026-11-08
+
+Phase 12 of the S2 build (`S2-12`, deploy verification).
+
+### Added
+
+- The integration suite now runs for real: 8 files / 63 tests against a live
+  PostgreSQL 16 via `TEST_DATABASE_URL` (the database name must contain `test`).
+
+### Fixed
+
+- `test/integration/http.test.ts` asserted schema `0005` and that ops routes 404
+  when dev ops is off. Both described the pre-`S2-10` server: the schema version is
+  now the newest migration file, and the ops surface is always registered (session
+  auth), so a disabled dev token is `401`, not `404`.
+- `test/integration/helpers.ts` truncates `simulator_scenarios`, `ops_sessions`
+  and `ops_users`, so a second run no longer collides on `ops_users_email_key`.
+- `SERVICE_VERSION` default was still `0.5.0-dev.0`; it is `0.8.0-dev.0`.
+
+### Verified (production shape, local Postgres)
+
+- `NODE_ENV=production ENABLE_DEV_OPS=false`: `/health`, `/ready`, `/version`
+  (`0007_ops_sessions.sql`), `/ops/console` 200, ops reads `401` without a
+  session, dev token `401`, login 200 as `operator`, `/ops/v1/accounts` and
+  `/ops/v1/audit` 200, scenario arm on a missing payout `404`.
+- Gates: lint 0 (94 files), typecheck 0, 93 unit+contract, 63 integration, build,
+  `openapi:check` current.
+
+### Not done
+
+- The live cutover. Vercel stores `DATABASE_URL` as a write-only secret, so
+  `0006`/`0007` could not be applied to Neon and the new build was not deployed:
+  deploying it against schema `0005` would fail payout advance and ops login.
+  Production therefore stays `v0.4.0-dev.0` / `0005_outbox_webhooks.sql`.
+- `S2-13` (release) stays open until that cutover is verified.
+
 ## [0.7.0-dev.0] — 2026-11-08
 
 Phase 11 of the S2 build (`S2-11`).
