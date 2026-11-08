@@ -13,6 +13,9 @@ contract, schema/migrations/seed, double-entry ledger, accounts and balances,
 idempotency, holds and payouts, statements/EOD and the adjustable ops clock, and
 the transactional outbox with signed webhook delivery.
 
+Production demo: **https://sim-s2-bank.vercel.app** (Vercel Functions in `sin1`,
+Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
+
 ## Scope delivered so far
 
 | Phase | Packet | What exists |
@@ -26,8 +29,7 @@ the transactional outbox with signed webhook delivery.
 | 7 | `S2-07` | Statements (JSON/CSV/MT940) for any booking-date range, sequential EOD snapshots, adjustable ops clock (freeze/step/resume) |
 | 8 | `S2-08` | Transactional outbox, webhook subscriptions, HMAC-signed at-least-once delivery, retry/backoff, dead-letter, ops replay, event pull cursor |
 
-Not built yet: failure scenarios, beneficiary book, ops console, OpenAPI, live
-deploy, release.
+Not built yet: failure scenarios, beneficiary book, ops console, OpenAPI, release.
 
 ## Run locally
 
@@ -104,6 +106,31 @@ After cut-off (15:00 GST) a payout without a `value_date` is scheduled for the n
 business day; asking for same-day settlement after the cut-off returns
 `422 cutoff_passed`.
 
+## Deploy (Vercel + Neon)
+
+The production deployment is one Vercel Function (`api/index.ts` rewrites every
+path through Fastify) and a Neon Postgres database. `vercel.json` disables
+framework detection so Vercel uses that handler instead of its Fastify entrypoint
+scan, and pins functions to `sin1`.
+
+```bash
+# 1. apply migrations to the production database (direct, unpooled URL)
+DATABASE_URL='<neon-direct-url>' API_KEY_PEPPER='<32+ bytes>' \
+  NODE_ENV=production ENABLE_DEV_OPS=false node dist/cli/migrate.js
+
+# 2. seed the demo tenant once; it prints the API key exactly once
+DATABASE_URL='<neon-direct-url>' API_KEY_PEPPER='<same pepper>' \
+  NODE_ENV=production ENABLE_DEV_OPS=false node dist/cli/seed.js
+
+# 3. deploy; set the same API_KEY_PEPPER, WEBHOOK_SECRET_KEY, OPS_DEV_TOKEN,
+#    DATABASE_URL (pooled), ENABLE_DEV_OPS=false and SERVICE_VERSION in Vercel
+vercel --prod
+```
+
+Use the pooled connection string for `DATABASE_URL`; use the direct URL only for
+migrations and seeding. `ENABLE_DEV_OPS=true` is rejected at boot when
+`NODE_ENV=production`.
+
 ## Checks
 
 ```bash
@@ -136,6 +163,8 @@ migrations/        numbered plain SQL
 test/unit          fast rules tests
 test/integration   real Postgres tests (webhooks use a real local receiver)
 api/index.ts       Vercel Node handler
+public/            empty static output for the functions-only Vercel build
+vercel.json        Vercel build, rewrite and function-region config
 ```
 
 ## Rules this repo follows

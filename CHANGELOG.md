@@ -39,13 +39,25 @@ Phase 8 of the S2 build (`S2-08`).
   are exempt from `Idempotency-Key`; every other write still requires it.
 - Version is `0.4.0-dev.0`.
 
+### Deployed
+
+- Live demo at `https://sim-s2-bank.vercel.app` on Vercel Functions in `sin1`
+  with Neon Postgres in `ap-southeast-1`; schema
+  `0005_outbox_webhooks.sql`, `ENABLE_DEV_OPS=false`.
+- `vercel.json` disables framework detection so the explicit `api/index.ts`
+  Fastify handler is used, pins functions to `sin1`, and the functions-only
+  project ships an empty `public/` output directory.
+- Production smoke: accounts, JSON/MT940 statements, EOD close, event pull,
+  webhook registration and dispatch all pass; both `credit.posted` and
+  `eod.closed` delivered with HTTP 200 and a receiver-recomputed valid HMAC.
+
 ### Known limits
 
 - Delivery is in-process: nothing runs a worker on a schedule; a cron or the ops
   endpoint must call dispatch.
 - Events are stored forever (no retention policy yet).
 - No per-subscription rate limit or circuit breaker beyond attempt backoff.
-- No failure scenarios, ops console, OpenAPI, or live deploy yet.
+- No failure scenarios, ops console or OpenAPI yet.
 
 ## [0.3.0-dev.0] — 2026-11-07
 

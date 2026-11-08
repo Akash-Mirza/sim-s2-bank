@@ -3,6 +3,9 @@
 Scope: phases 1–8 (`S2-01`…`S2-08`). This document is the source of truth for what
 the simulator must do; `openapi.yaml` and the remaining packets are not built yet.
 
+Live deployment: `https://sim-s2-bank.vercel.app` (Vercel Functions `sin1` + Neon
+Postgres `ap-southeast-1`, schema `0005_outbox_webhooks.sql`, dev-ops disabled).
+
 ## 1. Purpose and boundary
 
 S2 is the money rail the product integrates against. It holds the issuer's
