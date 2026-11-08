@@ -1,6 +1,6 @@
-# S2 — Bank Simulator Specification (v0.4.0-dev.0)
+# S2 — Bank Simulator Specification (v0.5.0-dev.0)
 
-Scope: phases 1–8 (`S2-01`…`S2-08`). This document is the source of truth for what
+Scope: phases 1–9 (`S2-01`…`S2-09`). This document is the source of truth for what
 the simulator must do; `openapi.yaml` and the remaining packets are not built yet.
 
 Live deployment: `https://sim-s2-bank.vercel.app` (Vercel Functions `sin1` + Neon
@@ -30,11 +30,12 @@ In scope now:
 - a double-entry ledger with immutable posted rows;
 - tenant resolution from an API key;
 - an audit trail for every posting, account opening, hold, payout transition and
-  EOD close.
+  EOD close;
+- armed failure scenarios (`underpaid`, `sanctions_hold`, `bank_timeout`,
+  `returned`) that bend or refuse exactly one payout transition.
 
 Out of scope: real money, real PII, real bank connectivity, KYB (S3), FX (S9),
-cross-border (S10), beneficiary book, failure scenarios, ops console (later S2
-packets).
+cross-border (S10), beneficiary book, ops console (later S2 packets).
 
 ## 2. Money, ledger, hold and payout rules
 
@@ -125,6 +126,30 @@ subfield layout is the simulator's stable contract, not a claim about any one ba
 The receiver envelope is `{"id","type","created_at","data"}`. `data` is the event
 payload; the same bytes are signed, so a receiver can verify before parsing.
 
+### 2.4 Failure scenarios
+
+A scenario is armed against one payout and consumed by the transition it affects.
+It never invents a parallel state machine; it bends or refuses one legal step.
+
+| Kind | When it fires | Effect | Arm state |
+|---|---|---|---|
+| `underpaid` | `accepted → settled` | debit `amount − shortfall`, release the full hold, `settled_amount` and `failure_code: underpaid` recorded | consumed |
+| `sanctions_hold` | `→ accepted` or `→ settled` | `423 payment_held`, nothing moves | stays armed |
+| `bank_timeout` | `submitted → accepted` | `504 rail_timeout`, payout stays `submitted`, hold stays active | stays armed |
+| `returned` | `submitted → accepted` | transition redirected to `submitted → returned`, hold released, ledger untouched | consumed |
+
+Rules:
+
+- At most one armed scenario per payout (partial unique index, `409 scenario_conflict`).
+- A scenario cannot be armed on a terminal payout (`settled`, `returned`, `failed`,
+  `cancelled`).
+- `shortfall` is only valid for `underpaid`; default is 10% of the amount, at least
+  one fil, always smaller than the payout.
+- The armed row is read `FOR UPDATE` inside the money transaction, so the scenario,
+  the ledger change and the outbox event commit together or roll back together.
+- `returned` before settlement releases the reserve; returning a settled payout is
+  still the separate ops reversal path (`reverse`).
+
 ## 3. Data model
 
 `0001_init.sql`: `tenants`, `api_keys`, `accounts`, `account_balances`,
@@ -143,6 +168,10 @@ checksum) and `eod_state` (last closed business date per tenant/account).
 `published_at`), `webhook_subscriptions` (URL, encrypted secret, event filters,
 status) and `webhook_deliveries` (attempts, `next_retry_at`, last status/error,
 signature, unique on `(subscription_id, event_id)`).
+
+`0006_failure_scenarios.sql`: `simulator_scenarios` (tenant, account, payout, kind,
+shortfall, `armed`/`consumed`/`disarmed`, one armed row per payout) and
+`payouts.settled_amount_minor` (what the beneficiary actually received).
 
 - `accounts.iban` unique, 23-character UAE IBAN (`AE` + check + bank code + 16 digits).
 - `ledger_entries.direction` in `D`/`C`; `amount_minor > 0`; `currency = 'AED'`.
@@ -200,6 +229,11 @@ signature, unique on `(subscription_id, event_id)`).
 | POST | `/v1/outbox/dispatch` | bearer + `webhooks:write` | drain this tenant's due deliveries |
 | POST | `/ops/v1/outbox/dispatch` | `x-ops-token` | **dev only** drain across tenants |
 | POST | `/ops/v1/webhooks/deliveries/{id}/replay` | `x-ops-token` | **dev only** re-arm a delivery |
+| POST | `/v1/scenarios` | bearer + `payouts:write` | arm a failure scenario on a payout, 201 |
+| GET | `/v1/scenarios` | bearer + `payouts:read` | tenant scenarios, newest first |
+| DELETE | `/v1/scenarios/{id}` | bearer + `payouts:write` | disarm an armed scenario |
+| POST | `/ops/v1/scenarios` | `x-ops-token` | **dev only** arm for any payout |
+| GET | `/ops/v1/scenarios` | `x-ops-token` | **dev only** list across tenants |
 
 Conventions: `Authorization: Bearer sk_sim_<prefix>_<secret>`; amounts as strings;
 every response contains `"mode":"sim"`; errors are
@@ -214,9 +248,9 @@ because a replay must actually run rather than return a stale summary.
 
 Errors used so far: `validation_error` 400, `unauthorized` 401, `forbidden` 403,
 `not_found` 404, `idempotency_conflict` 409, `invalid_state_transition` 409,
-`invalid_iban` 422, `invalid_bic` 422, `cutoff_passed` 422,
+`scenario_conflict` 409, `invalid_iban` 422, `invalid_bic` 422, `cutoff_passed` 422,
 `amount_out_of_range` 422, `insufficient_funds` 422, `account_restricted` 423,
-`internal_error` 500.
+`payment_held` 423, `internal_error` 500, `rail_timeout` 504.
 
 ## 5. Configuration
 
@@ -280,7 +314,18 @@ at runtime. The business date and cut-off are always resolved in `Asia/Dubai`.
 | S2-T-067 | tenant isolation, invalid URLs/filters, scopes, idempotent registration and write-only secrets | `test/integration/webhooks.test.ts` |
 | S2-T-068 | the pull cursor pages events once each and disables delivery on subscription delete | `test/integration/webhooks.test.ts` |
 
+### 6.1 Failure-scenario acceptance tests (`S2-09`)
+
+| ID | Test | Where |
+|---|---|---|
+| S2-T-060 | underpaid settles `amount − shortfall`, releases the hold and records `settled_amount` | `test/integration/scenarios.test.ts` |
+| S2-T-061 | sanctions hold refuses accept and settle with 423 and stays armed | `test/integration/scenarios.test.ts` |
+| S2-T-062 | bank timeout refuses accept with 504, payout still `submitted`, hold active | `test/integration/scenarios.test.ts` |
+| S2-T-063 | returned redirects accept into `returned` and releases the reserve | `test/integration/scenarios.test.ts` |
+| S2-T-064 | one armed scenario per payout; disarm; terminal payouts refuse scenarios | `test/integration/scenarios.test.ts` |
+| S2-T-065 | scenario resolution rules, default shortfall and guards | `test/unit/scenario.test.ts` |
+
 ## 7. Next packets
 
-`S2-09` failure scenarios, `S2-10` ops console, `S2-11` OpenAPI + contract tests,
-`S2-12` deploy verification, `S2-13` release.
+`S2-10` ops console, `S2-11` OpenAPI + contract tests, `S2-12` deploy
+verification, `S2-13` release.

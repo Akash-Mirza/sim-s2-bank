@@ -17,6 +17,7 @@ import type { BalanceSnapshot } from "../domain/balance.js";
 import { settlementDate } from "../domain/calendar.js";
 import { PAYOUT_MAX_MINOR } from "../domain/constants.js";
 import {
+  DomainError,
   amountOutOfRange,
   invalidBic,
   invalidIban,
@@ -31,6 +32,7 @@ import { type EventType, validateEventType } from "../domain/webhook.js";
 import { createHoldTx, lockAccountBalance, releaseHoldTx } from "./holds.js";
 import { enqueueEventTx } from "./outbox.js";
 import { postMovementTx } from "./post-movement.js";
+import { resolvePayoutScenarioTx } from "./scenarios.js";
 
 const BIC_PATTERN = /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
 
@@ -56,6 +58,8 @@ function payoutPayload(payout: PayoutRecord) {
     scheduled_for: payout.scheduledFor,
     cutoff_at: payout.cutoffAt,
     transaction_id: payout.transactionId,
+    settled_amount:
+      payout.settledAmountMinor === null ? null : formatAmountMinor(payout.settledAmountMinor),
     hold_id: payout.holdId,
     failure_code: payout.failureCode,
     failure_reason: payout.failureReason,
@@ -221,13 +225,35 @@ export async function advancePayoutTx(
     throw notFound("payout not found");
   }
 
-  const to = input.to ?? nextPayoutStatus(current.status);
-  if (to === null) {
+  const requested = input.to ?? nextPayoutStatus(current.status);
+  if (requested === null) {
     throw invalidStateTransition(current.status, "next", []);
   }
+
+  // An armed failure scenario can refuse this step or bend it (returned instead of
+  // accepted, underpaid at settlement). It is read inside this transaction, so the
+  // scenario, the money and the event commit together or not at all.
+  const scenario = await resolvePayoutScenarioTx(client, {
+    tenantId: current.tenantId,
+    payoutId: current.id,
+    from: current.status,
+    to: requested,
+    amountMinor: current.amountMinor,
+  });
+  if (scenario.block !== null) {
+    throw new DomainError(
+      scenario.block.code,
+      scenario.block.message,
+      scenario.block.statusCode,
+      scenario.block.details,
+    );
+  }
+
+  const to = scenario.to;
   assertPayoutTransition(current.status, to);
 
   let transactionId: string | undefined;
+  let settledMinor: bigint | undefined;
   let balance: PayoutResult["balance"] = null;
 
   if (to === "settled") {
@@ -239,12 +265,14 @@ export async function advancePayoutTx(
       throw invalidStateTransition(hold?.status ?? "missing", "captured", ["active"]);
     }
 
+    const settleMinor = scenario.settleMinor ?? current.amountMinor;
+
     const movement = await postMovementTx(client, input.clock, {
       tenantId: current.tenantId,
       accountId: current.accountId,
       direction: "debit",
       type: "payout",
-      amountMinor: current.amountMinor,
+      amountMinor: settleMinor,
       reference: current.reference ?? undefined,
       endToEndId: current.endToEndId ?? undefined,
       valueDate: current.scheduledFor,
@@ -254,6 +282,7 @@ export async function advancePayoutTx(
     });
 
     transactionId = movement.transaction.id;
+    settledMinor = settleMinor;
     await setHoldStatus(client, hold.id, "captured", {
       capturedTransactionId: transactionId,
     });
@@ -293,15 +322,26 @@ export async function advancePayoutTx(
   }
 
   const now = input.clock.now().toISOString();
+  const settledAmount = settledMinor ?? current.amountMinor;
+  const underpaid =
+    to === "settled" && settledMinor !== undefined && settledMinor < current.amountMinor;
   const updated = await updatePayout(client, {
     payoutId: current.id,
     status: to,
     submittedAt: to === "submitted" ? now : undefined,
     settledAt: to === "settled" ? now : undefined,
     transactionId,
-    failureCode: to === "failed" ? "payout_failed" : to === "returned" ? "returned" : undefined,
-    failureReason:
-      to === "failed"
+    settledAmountMinor: settledMinor,
+    failureCode: underpaid
+      ? "underpaid"
+      : to === "failed"
+        ? "payout_failed"
+        : to === "returned"
+          ? "returned"
+          : undefined,
+    failureReason: underpaid
+      ? `the beneficiary bank received ${formatAmountMinor(settledAmount)} of ${formatAmountMinor(current.amountMinor)}`
+      : to === "failed"
         ? "the simulated rail rejected the payout"
         : to === "returned"
           ? "the simulated rail returned the funds"
@@ -359,7 +399,7 @@ export async function reverseSettledPayoutTx(
     accountId: current.accountId,
     direction: "credit",
     type: "reversal",
-    amountMinor: current.amountMinor,
+    amountMinor: current.settledAmountMinor ?? current.amountMinor,
     reference: `RETURN-${current.reference ?? current.id}`,
     reversalOf: current.transactionId,
     actor: input.actor,

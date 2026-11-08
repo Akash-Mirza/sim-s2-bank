@@ -9,6 +9,7 @@ import { registerEodRoutes } from "./routes/eod.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerOpsRoutes } from "./routes/ops.js";
 import { registerPayoutRoutes } from "./routes/payouts.js";
+import { registerScenarioRoutes } from "./routes/scenarios.js";
 import { registerStatementRoutes } from "./routes/statements.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 
@@ -47,6 +48,7 @@ export function buildServer(env: Env): FastifyInstance {
   registerStatementRoutes(app, { db, env, clock });
   registerEodRoutes(app, { db, env, clock });
   registerWebhookRoutes(app, { db, env });
+  registerScenarioRoutes(app, { db, env, clock });
   registerOpsRoutes(app, { db, env, clock });
 
   return app;

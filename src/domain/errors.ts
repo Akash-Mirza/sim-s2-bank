@@ -11,6 +11,9 @@ export type ErrorCode =
   | "invalid_state_transition"
   | "amount_out_of_range"
   | "idempotency_conflict"
+  | "payment_held"
+  | "rail_timeout"
+  | "scenario_conflict"
   | "internal_error";
 
 /** A rule the domain refused, carrying the HTTP mapping for the edge. */
