@@ -3,6 +3,43 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [0.7.0-dev.0] — 2026-11-08
+
+Phase 11 of the S2 build (`S2-11`).
+
+### Added
+
+- `src/contracts/spec.ts`: the API contract as a typed route table (53 routes) plus
+  component schemas in a small JSON Schema subset.
+- `openapi.yaml` at the repo root, generated from the route table, with both
+  security schemes, per-operation scopes, the `Idempotency-Key` parameter on every
+  write that needs it, and documented error statuses.
+- `src/contracts/api-types.ts`: generated TypeScript interfaces for every component.
+- `pnpm openapi` writes both artifacts; `pnpm openapi:check` fails when either is
+  stale.
+- `test/contract/spec.test.ts`: route-table parity with the running Fastify server
+  (via a new `onRoute` hook on `buildServer`), idempotency-coverage enforcement with
+  the exemption list pinned, generated-file drift checks, and runtime checks of the
+  documented error envelope and `x-request-id` echo.
+- `pnpm test` now runs unit + contract tests; `pnpm test:contract` runs the contract
+  suite alone.
+
+### Changed
+
+- `buildServer(env, { onRoute })` can report every registered route, which is what
+  makes the parity test possible without a live database.
+- `src/contracts/api-types.ts` is excluded from Biome so regeneration is
+  deterministic and the drift check is meaningful.
+- Version is `0.7.0-dev.0`.
+
+### Known limits
+- The contract is not validated by an external OpenAPI validator; the suite checks
+  structure, parity and runtime envelopes, not every OpenAPI rule.
+- Statement payloads advertise their content types, but the contract does not model
+  every MT940 subfield.
+- Contract tests need no database; they do not exercise authenticated success paths
+  (those are the integration suite).
+
 ## [0.6.0-dev.0] — 2026-11-08
 
 Phase 10 of the S2 build (`S2-10`).

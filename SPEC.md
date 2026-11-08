@@ -1,7 +1,8 @@
-# S2 — Bank Simulator Specification (v0.6.0-dev.0)
+# S2 — Bank Simulator Specification (v0.7.0-dev.0)
 
-Scope: phases 1–10 (`S2-01`…`S2-10`). This document is the source of truth for what
-the simulator must do; `openapi.yaml` and the remaining packets are not built yet.
+Scope: phases 1–11 (`S2-01`…`S2-11`). `openapi.yaml` is generated from
+`src/contracts/spec.ts` and describes every route; this document explains the rules
+behind it. `S2-12` and `S2-13` are not built yet.
 
 Live deployment: `https://sim-s2-bank.vercel.app` (Vercel Functions `sin1` + Neon
 Postgres `ap-southeast-1`, schema `0005_outbox_webhooks.sql`, dev-ops disabled).
@@ -355,6 +356,16 @@ at runtime. The business date and cut-off are always resolved in `Asia/Dubai`.
 | S2-T-076 | console HTML served unauthenticated; `/ops/v1/audit` needs a session | `test/integration/ops-console.test.ts` |
 | S2-T-077 | scrypt hash/verify, malformed hash, token regex, pepper-salted hash | `test/unit/ops-auth.test.ts` |
 
+### 6.3 Contract acceptance tests (`S2-11`)
+
+| ID | Test | Where |
+|---|---|---|
+| S2-T-080 | route table equals the routes Fastify registers, no extras on either side | `test/contract/spec.test.ts` |
+| S2-T-081 | every POST/DELETE declares `Idempotency-Key` unless in the pinned exemption list | `test/contract/spec.test.ts` |
+| S2-T-082 | `openapi.yaml` and `src/contracts/api-types.ts` match the generator output | `test/contract/spec.test.ts` |
+| S2-T-083 | every API-key route declares a known scope; every schema reference resolves | `test/contract/spec.test.ts` |
+| S2-T-084 | the documented error envelope and `x-request-id` echo hold on a live request | `test/contract/spec.test.ts` |
+
 ## 7. Next packets
 
-`S2-11` OpenAPI + contract tests, `S2-12` deploy verification, `S2-13` release.
+`S2-12` deploy verification, `S2-13` release.

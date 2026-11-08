@@ -16,7 +16,17 @@ import { registerScenarioRoutes } from "./routes/scenarios.js";
 import { registerStatementRoutes } from "./routes/statements.js";
 import { registerWebhookRoutes } from "./routes/webhooks.js";
 
-export function buildServer(env: Env): FastifyInstance {
+export interface RouteRegistration {
+  methods: readonly string[];
+  url: string;
+}
+
+export interface BuildServerOptions {
+  /** Called for every registered route; used by the contract tests (S2-11). */
+  onRoute?: (route: RouteRegistration) => void;
+}
+
+export function buildServer(env: Env, options: BuildServerOptions = {}): FastifyInstance {
   const app = Fastify({
     logger:
       env.nodeEnv === "test"
@@ -28,6 +38,14 @@ export function buildServer(env: Env): FastifyInstance {
     },
     bodyLimit: 1_048_576,
   });
+
+  if (options.onRoute !== undefined) {
+    const onRoute = options.onRoute;
+    app.addHook("onRoute", (route) => {
+      const methods = Array.isArray(route.method) ? route.method : [route.method];
+      onRoute({ methods, url: route.url });
+    });
+  }
 
   const db = createPool(env.databaseUrl);
   const clock = adjustableClock(env.simClock);
