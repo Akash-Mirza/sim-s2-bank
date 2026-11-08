@@ -8,12 +8,12 @@ double-entry ledger in fils, simulated incoming credit, replay-safe writes, hold
 local AED payouts with a UAE cut-off, statements, and signed webhooks. Every
 response carries `"mode":"sim"` and the data is synthetic.
 
-Status: **phases 1–11 of 13 shipped** (`v0.7.0-dev.0`) — scaffold and deploy
+Status: **phases 1–12 of 13 shipped** (`v0.8.0-dev.0`) — scaffold and deploy
 contract, schema/migrations/seed, double-entry ledger, accounts and balances,
 idempotency, holds and payouts, statements/EOD and the adjustable ops clock, the
 transactional outbox with signed webhook delivery, armed failure scenarios, the ops
-console with real session auth, and the generated OpenAPI contract with contract
-tests.
+console with real session auth, the generated OpenAPI contract with contract
+tests, and the integration suite running green against a real Postgres.
 
 Production demo: **https://sim-s2-bank.vercel.app** (Vercel Functions in `sin1`,
 Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
@@ -33,8 +33,10 @@ Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
 | 9 | `S2-09` | Failure scenarios: underpaid settlement, sanctions hold, rail timeout, return before settlement; tenant and ops scenario routes |
 | 10 | `S2-10` | Ops users (scrypt), sessions with roles (viewer/operator/admin), session guard replacing the dev token in production, and the `/ops/console` UI |
 | 11 | `S2-11` | Contract as code: 53-route table, generated `openapi.yaml` and `api-types.ts`, contract tests for route parity, idempotency coverage and drift |
+| 12 | `S2-12` | Integration suite executed against Postgres 16 (8 files, 63 tests) and a production-shape runtime smoke: session login, roles, console, 401 gates, schema report |
 
-Not built yet: beneficiary book, deploy verification, release.
+Not built yet: beneficiary book, the `0.8.0` production cutover (Neon `0006`/`0007`
+still unapplied), and the `S2-13` release.
 
 ## Run locally
 
