@@ -13,6 +13,8 @@ const rawEnvSchema = z
     // Fail closed: a production process must opt in explicitly, never by omission.
     ENABLE_DEV_OPS: z.enum(["true", "false"]).default("false"),
     OPS_DEV_TOKEN: z.string().min(8).default("dev-ops-token"),
+    // Lifetime of an ops console session (S2-10). One working day by default.
+    OPS_SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(168).default(12),
     API_KEY_PEPPER: z.string().min(16),
     // Optional dedicated key for encrypting webhook signing secrets at rest.
     WEBHOOK_SECRET_KEY: z.string().min(16).optional(),
@@ -38,6 +40,7 @@ export interface Env {
   simClock: string | undefined;
   enableDevOps: boolean;
   opsDevToken: string;
+  opsSessionTtlHours?: number;
   apiKeyPepper: string;
   webhookSecretKey?: string;
   version: string;
@@ -63,6 +66,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     simClock: value.SIM_CLOCK,
     enableDevOps: value.ENABLE_DEV_OPS === "true",
     opsDevToken: value.OPS_DEV_TOKEN,
+    opsSessionTtlHours: value.OPS_SESSION_TTL_HOURS,
     apiKeyPepper: value.API_KEY_PEPPER,
     webhookSecretKey: value.WEBHOOK_SECRET_KEY,
     version: value.SERVICE_VERSION,

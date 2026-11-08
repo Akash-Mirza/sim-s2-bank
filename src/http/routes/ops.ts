@@ -4,10 +4,11 @@ import { z } from "zod";
 import { getAccountUnscoped } from "../../adapters/db/accounts.js";
 import { getDeliveryUnscoped, requeueDelivery } from "../../adapters/db/outbox.js";
 import { getPayoutUnscoped } from "../../adapters/db/payouts.js";
+import { getScenarioUnscoped } from "../../adapters/db/scenarios.js";
 import { dispatchOutbox } from "../../application/outbox.js";
 import { advancePayoutTx, reverseSettledPayoutTx } from "../../application/payouts.js";
 import { postMovementTx } from "../../application/post-movement.js";
-import { armScenarioTx, listEveryScenario } from "../../application/scenarios.js";
+import { armScenarioTx, disarmScenarioTx, listEveryScenario } from "../../application/scenarios.js";
 import type { AdjustableClock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
 import { MODE } from "../../domain/constants.js";
@@ -15,6 +16,7 @@ import { notFound } from "../../domain/errors.js";
 import { formatAmountMinor, parseAmountMinor } from "../../domain/money.js";
 import { PAYOUT_STATUSES } from "../../domain/payout.js";
 import { requireIdempotencyKey, withIdempotency } from "../idempotency.js";
+import { opsActor, requireOps } from "../ops-auth.js";
 import { registerOpsClockRoutes } from "./ops-clock.js";
 import { serializeBalance, serializePayout } from "./payouts.js";
 import { scenarioArmBody, scenarioListQuery, serializeScenario } from "./scenarios.js";
@@ -52,35 +54,21 @@ const dispatchBody = z.object({
 });
 
 /**
- * Dev-only ops surface. Real ops session auth and the ops console arrive in S2-10;
- * until then the whole surface is behind ENABLE_DEV_OPS + a shared dev token, and
- * production refuses to boot with it enabled.
+ * Ops control plane.
+ *
+ * Since `S2-10` every route is authorized by an ops session (email + password ->
+ * short-lived bearer token) with a role; the shared dev token survives only for
+ * local development, where `ENABLE_DEV_OPS` can be true. The actor recorded on each
+ * change is `ops:<email>`, so the audit trail names a person, not a shared token.
  */
 export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): void {
   const { db, env, clock } = deps;
 
-  app.addHook("onRequest", async (request, reply) => {
-    if (!request.url.startsWith("/ops/")) return;
-    if (!env.enableDevOps) {
-      return reply.status(404).send({
-        error: { code: "not_found", message: "not found", request_id: request.id, details: null },
-      });
-    }
-  });
-
   app.post<{ Params: { id: string } }>(
     "/ops/v1/accounts/:id/simulate-credit",
     async (request, reply) => {
-      if (request.headers["x-ops-token"] !== env.opsDevToken) {
-        return reply.status(401).send({
-          error: {
-            code: "unauthorized",
-            message: "invalid ops token",
-            request_id: request.id,
-            details: null,
-          },
-        });
-      }
+      const principal = await requireOps({ db, env }, request, { write: true });
+      const actor = opsActor(principal);
 
       const body = simulateCreditBody.parse(request.body ?? {});
       const amountMinor = parseAmountMinor(body.amount);
@@ -108,7 +96,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
             reference: body.reference,
             remitter: body.remitter,
             valueDate: body.value_date,
-            actor: "ops:dev",
+            actor,
             requestId: request.id,
           });
 
@@ -138,16 +126,8 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
   );
 
   app.post<{ Params: { id: string } }>("/ops/v1/payouts/:id/advance", async (request, reply) => {
-    if (request.headers["x-ops-token"] !== env.opsDevToken) {
-      return reply.status(401).send({
-        error: {
-          code: "unauthorized",
-          message: "invalid ops token",
-          request_id: request.id,
-          details: null,
-        },
-      });
-    }
+    const principal = await requireOps({ db, env }, request, { write: true });
+    const actor = opsActor(principal);
 
     const body = advanceBody.parse(request.body ?? {});
     const key = requireIdempotencyKey(request);
@@ -169,7 +149,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
           clock,
           payoutId: request.params.id,
           to: body.to,
-          actor: "ops:dev",
+          actor,
           requestId: request.id,
         });
 
@@ -190,16 +170,8 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
   });
 
   app.post<{ Params: { id: string } }>("/ops/v1/payouts/:id/reverse", async (request, reply) => {
-    if (request.headers["x-ops-token"] !== env.opsDevToken) {
-      return reply.status(401).send({
-        error: {
-          code: "unauthorized",
-          message: "invalid ops token",
-          request_id: request.id,
-          details: null,
-        },
-      });
-    }
+    const principal = await requireOps({ db, env }, request, { write: true });
+    const actor = opsActor(principal);
 
     const key = requireIdempotencyKey(request);
 
@@ -219,7 +191,7 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
         const reversed = await reverseSettledPayoutTx(client, {
           clock,
           payoutId: request.params.id,
-          actor: "ops:dev",
+          actor,
           requestId: request.id,
         });
 
@@ -239,23 +211,14 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
     return reply.status(result.status).send(result.body);
   });
 
-  registerOpsClockRoutes(app, { env, clock });
+  registerOpsClockRoutes(app, { db, env, clock });
 
   /**
    * Drain due deliveries across tenants (or one tenant). Like the clock routes this
    * is a control-plane tick and is exempt from Idempotency-Key.
    */
-  app.post("/ops/v1/outbox/dispatch", async (request, reply) => {
-    if (request.headers["x-ops-token"] !== env.opsDevToken) {
-      return reply.status(401).send({
-        error: {
-          code: "unauthorized",
-          message: "invalid ops token",
-          request_id: request.id,
-          details: null,
-        },
-      });
-    }
+  app.post("/ops/v1/outbox/dispatch", async (request) => {
+    await requireOps({ db, env }, request, { write: true });
 
     const body = dispatchBody.parse(request.body ?? {});
     const summary = await dispatchOutbox(
@@ -269,16 +232,8 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
   app.post<{ Params: { id: string } }>(
     "/ops/v1/webhooks/deliveries/:id/replay",
     async (request, reply) => {
-      if (request.headers["x-ops-token"] !== env.opsDevToken) {
-        return reply.status(401).send({
-          error: {
-            code: "unauthorized",
-            message: "invalid ops token",
-            request_id: request.id,
-            details: null,
-          },
-        });
-      }
+      const principal = await requireOps({ db, env }, request, { write: true });
+      const actor = opsActor(principal);
 
       const found = await getDeliveryUnscoped(db, request.params.id);
       if (found === null) throw notFound("webhook delivery not found");
@@ -298,7 +253,11 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
           if (delivery === null) throw notFound("webhook delivery not found");
           return {
             status: 200,
-            body: { mode: MODE, delivery: serializeDelivery(delivery) },
+            body: {
+              mode: MODE,
+              delivery: serializeDelivery(delivery),
+              rearmed_by: actor,
+            },
           };
         },
       );
@@ -310,16 +269,8 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
 
   /** Arm a failure scenario for any tenant's payout (the console's Scenarios tab). */
   app.post("/ops/v1/scenarios", async (request, reply) => {
-    if (request.headers["x-ops-token"] !== env.opsDevToken) {
-      return reply.status(401).send({
-        error: {
-          code: "unauthorized",
-          message: "invalid ops token",
-          request_id: request.id,
-          details: null,
-        },
-      });
-    }
+    const principal = await requireOps({ db, env }, request, { write: true });
+    const actor = opsActor(principal);
 
     const body = scenarioArmBody.parse(request.body ?? {});
     const shortfallMinor =
@@ -344,14 +295,11 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
           payoutId: found.id,
           kind: body.kind,
           shortfallMinor,
-          actor: "ops:dev",
+          actor,
           requestId: request.id,
         });
 
-        return {
-          status: 201,
-          body: { mode: MODE, scenario: serializeScenario(scenario) },
-        };
+        return { status: 201, body: { mode: MODE, scenario: serializeScenario(scenario) } };
       },
     );
 
@@ -359,20 +307,42 @@ export function registerOpsRoutes(app: FastifyInstance, deps: OpsRouteDeps): voi
     return reply.status(result.status).send(result.body);
   });
 
-  app.get("/ops/v1/scenarios", async (request, reply) => {
-    if (request.headers["x-ops-token"] !== env.opsDevToken) {
-      return reply.status(401).send({
-        error: {
-          code: "unauthorized",
-          message: "invalid ops token",
-          request_id: request.id,
-          details: null,
-        },
-      });
-    }
-
+  app.get("/ops/v1/scenarios", async (request) => {
+    await requireOps({ db, env }, request);
     const query = scenarioListQuery.parse(request.query ?? {});
     const scenarios = await listEveryScenario(db, { status: query.status, limit: query.limit });
     return { mode: MODE, data: scenarios.map(serializeScenario) };
+  });
+
+  app.delete<{ Params: { id: string } }>("/ops/v1/scenarios/:id", async (request, reply) => {
+    const principal = await requireOps({ db, env }, request, { write: true });
+    const actor = opsActor(principal);
+
+    const found = await getScenarioUnscoped(db, request.params.id);
+    if (found === null) throw notFound("scenario not found");
+    const key = requireIdempotencyKey(request);
+
+    const result = await withIdempotency(
+      {
+        db,
+        tenantId: found.tenantId,
+        key,
+        method: request.method,
+        route: request.routeOptions.url ?? request.url,
+        body: { scenario_id: request.params.id },
+      },
+      async (client) => {
+        const scenario = await disarmScenarioTx(client, {
+          tenantId: found.tenantId,
+          scenarioId: request.params.id,
+          actor,
+          requestId: request.id,
+        });
+        return { status: 200, body: { mode: MODE, scenario: serializeScenario(scenario) } };
+      },
+    );
+
+    if (result.replayed) reply.header("idempotent-replayed", "true");
+    return reply.status(result.status).send(result.body);
   });
 }

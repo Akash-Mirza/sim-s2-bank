@@ -50,7 +50,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await truncateAll(pool);
-  const tenant = await createTenant(pool, { code: "scenario-test", legalName: "SCENARIO TEST LLC" });
+  const tenant = await createTenant(pool, {
+    code: "scenario-test",
+    legalName: "SCENARIO TEST LLC",
+  });
   tenantId = tenant.id;
   const key = await createApiKey(pool, { tenantId, pepper: PEPPER });
   authorization = `Bearer ${key.key}`;

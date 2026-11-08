@@ -8,10 +8,11 @@ double-entry ledger in fils, simulated incoming credit, replay-safe writes, hold
 local AED payouts with a UAE cut-off, statements, and signed webhooks. Every
 response carries `"mode":"sim"` and the data is synthetic.
 
-Status: **phases 1–9 of 13 shipped** (`v0.5.0-dev.0`) — scaffold and deploy
+Status: **phases 1–10 of 13 shipped** (`v0.6.0-dev.0`) — scaffold and deploy
 contract, schema/migrations/seed, double-entry ledger, accounts and balances,
 idempotency, holds and payouts, statements/EOD and the adjustable ops clock, the
-transactional outbox with signed webhook delivery, and armed failure scenarios.
+transactional outbox with signed webhook delivery, armed failure scenarios, and the
+ops console with real session auth.
 
 Production demo: **https://sim-s2-bank.vercel.app** (Vercel Functions in `sin1`,
 Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
@@ -29,8 +30,9 @@ Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
 | 7 | `S2-07` | Statements (JSON/CSV/MT940) for any booking-date range, sequential EOD snapshots, adjustable ops clock (freeze/step/resume) |
 | 8 | `S2-08` | Transactional outbox, webhook subscriptions, HMAC-signed at-least-once delivery, retry/backoff, dead-letter, ops replay, event pull cursor |
 | 9 | `S2-09` | Failure scenarios: underpaid settlement, sanctions hold, rail timeout, return before settlement; tenant and ops scenario routes |
+| 10 | `S2-10` | Ops users (scrypt), sessions with roles (viewer/operator/admin), session guard replacing the dev token in production, and the `/ops/console` UI |
 
-Not built yet: beneficiary book, ops console, OpenAPI, release.
+Not built yet: beneficiary book, OpenAPI and contract tests, release.
 
 ## Run locally
 
@@ -117,6 +119,28 @@ After cut-off (15:00 GST) a payout without a `value_date` is scheduled for the n
 business day; asking for same-day settlement after the cut-off returns
 `422 cutoff_passed`.
 
+## Ops console
+
+The console is served by the API itself at `http://localhost:4002/ops/console`. It
+logs in against `/ops/v1/auth/login` and keeps the `ops_` token in session storage;
+every tab calls the same `/ops/v1` routes the CLI uses.
+
+```bash
+# create the first operator (password never printed, scrypt-hashed in the DB)
+pnpm ops:user create --email ops@example.com --name "Ops" --role operator \
+  --password 'a-long-dev-password'
+pnpm ops:user list
+
+# or get a token by hand
+curl -s -X POST localhost:4002/ops/v1/auth/login -H 'content-type: application/json' \
+  -d '{"email":"ops@example.com","password":"a-long-dev-password"}'
+curl -s localhost:4002/ops/v1/accounts -H "Authorization: Bearer ops_..."
+```
+
+Roles: `viewer` reads, `operator` reads and writes, `admin` also manages users.
+The shared `x-ops-token` still works locally while `ENABLE_DEV_OPS=true`; production
+refuses that flag, so a deployed simulator is session-only.
+
 ## Deploy (Vercel + Neon)
 
 The production deployment is one Vercel Function (`api/index.ts` rewrites every
@@ -167,7 +191,7 @@ src/
 ├── domain/        pure money, IBAN, ledger, balance, calendar, payout, statement, EOD, webhook, scenario rules
 ├── application/   use cases: accounts, postings, holds, payouts, statements, EOD, outbox
 ├── adapters/      Postgres, migrations, crypto (API keys, webhook secrets/HMAC)
-├── http/          routes, auth, idempotency, error mapping, composition root
+├── http/          routes (tenant, ops, console), auth, ops sessions, idempotency, errors
 ├── config/        env validation, adjustable clock
 └── cli/           migrate, seed, reset (built into dist for compose)
 migrations/        numbered plain SQL
@@ -192,6 +216,7 @@ vercel.json        Vercel build, rewrite and function-region config
 - Webhook delivery is at-least-once and signed; retries are bounded, then dead-lettered.
 - A failure scenario bends or refuses one existing payout transition; it never adds a parallel state.
 - The tenant comes from the API key, never from the request body.
+- An ops action names a person (`ops:<email>`) and a role; the shared dev token is local only.
 - No secrets, no real PII, no real bank connectivity.
 
 See `SPEC.md` for the contract, `CHANGELOG.md` for what changed per release, and

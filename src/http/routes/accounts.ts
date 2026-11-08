@@ -59,7 +59,7 @@ function serializeBalance(balance: {
   };
 }
 
-function serializeAccount(account: {
+export function serializeAccount(account: {
   id: string;
   accountNumber: string;
   iban: string;

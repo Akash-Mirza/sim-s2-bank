@@ -1,9 +1,12 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
+import type { Pool } from "pg";
 import { z } from "zod";
 import type { AdjustableClock } from "../../config/clock.js";
 import type { Env } from "../../config/env.js";
+import { requireOps } from "../ops-auth.js";
 
 export interface OpsClockRouteDeps {
+  db: Pool;
   env: Env;
   clock: AdjustableClock;
 }
@@ -28,24 +31,6 @@ const stepBody = z
     { message: "provide seconds, minutes, hours or days" },
   );
 
-function rejectInvalidToken(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  env: Env,
-): FastifyReply | null {
-  if (request.headers["x-ops-token"] !== env.opsDevToken) {
-    return reply.status(401).send({
-      error: {
-        code: "unauthorized",
-        message: "invalid ops token",
-        request_id: request.id,
-        details: null,
-      },
-    });
-  }
-  return null;
-}
-
 /**
  * Control-plane clock for deterministic demos: freeze at an instant, step forward,
  * or resume the system clock. These routes are intentionally exempt from
@@ -53,30 +38,27 @@ function rejectInvalidToken(
  * replay domain.
  */
 export function registerOpsClockRoutes(app: FastifyInstance, deps: OpsClockRouteDeps): void {
-  const { env, clock } = deps;
+  const { db, env, clock } = deps;
 
   function clockBody() {
     return { mode: "sim" as const, clock: clock.state() };
   }
 
-  app.get("/ops/v1/clock", async (request, reply) => {
-    const rejected = rejectInvalidToken(request, reply, env);
-    if (rejected !== null) return rejected;
+  app.get("/ops/v1/clock", async (request) => {
+    await requireOps({ db, env }, request);
     return clockBody();
   });
 
-  app.post("/ops/v1/clock/freeze", async (request, reply) => {
-    const rejected = rejectInvalidToken(request, reply, env);
-    if (rejected !== null) return rejected;
+  app.post("/ops/v1/clock/freeze", async (request) => {
+    await requireOps({ db, env }, request, { write: true });
 
     const body = freezeBody.parse(request.body ?? {});
     clock.freeze(body.at);
     return clockBody();
   });
 
-  app.post("/ops/v1/clock/step", async (request, reply) => {
-    const rejected = rejectInvalidToken(request, reply, env);
-    if (rejected !== null) return rejected;
+  app.post("/ops/v1/clock/step", async (request) => {
+    await requireOps({ db, env }, request, { write: true });
 
     const body = stepBody.parse(request.body ?? {});
     const milliseconds =
@@ -89,10 +71,8 @@ export function registerOpsClockRoutes(app: FastifyInstance, deps: OpsClockRoute
     return clockBody();
   });
 
-  app.post("/ops/v1/clock/resume", async (request, reply) => {
-    const rejected = rejectInvalidToken(request, reply, env);
-    if (rejected !== null) return rejected;
-
+  app.post("/ops/v1/clock/resume", async (request) => {
+    await requireOps({ db, env }, request, { write: true });
     clock.resume();
     return clockBody();
   });

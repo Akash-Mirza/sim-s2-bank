@@ -410,6 +410,21 @@ export async function getPayoutUnscoped(
   return row === undefined ? null : mapPayout(row);
 }
 
+/** Ops-side list for the console; no tenant filter. */
+export async function listPayoutsUnscoped(
+  db: Queryable,
+  options: { status?: PayoutRecord["status"]; limit: number },
+): Promise<PayoutRecord[]> {
+  const result = await db.query<PayoutRow>(
+    `SELECT ${PAYOUT_COLUMNS} FROM payouts
+      WHERE ($1::text IS NULL OR status = $1)
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [options.status ?? null, options.limit],
+  );
+  return result.rows.map(mapPayout);
+}
+
 export async function listPayouts(
   db: Queryable,
   tenantId: string,
