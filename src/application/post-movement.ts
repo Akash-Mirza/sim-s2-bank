@@ -4,6 +4,8 @@ import { type BalanceSnapshot, applyLedgerMovement, availableMinor } from "../do
 import { CURRENCY, type TransactionType } from "../domain/constants.js";
 import { DomainError, validationError } from "../domain/errors.js";
 import { type Direction, assertBalanced, creditLines, debitLines } from "../domain/ledger.js";
+import { formatAmountMinor } from "../domain/money.js";
+import { enqueueEventTx } from "./outbox.js";
 
 export interface Remitter {
   name: string;
@@ -201,6 +203,34 @@ export async function postMovementTx(
       input.requestId ?? null,
     ],
   );
+
+  // Debits are owned by the use case that caused them (payout settlement emits
+  // payout.settled), so only incoming money becomes a ledger event here.
+  if (input.direction === "credit") {
+    await enqueueEventTx(client, {
+      tenantId: input.tenantId,
+      accountId: input.accountId,
+      type: input.type === "reversal" ? "reversal.posted" : "credit.posted",
+      payload: {
+        transaction_id: transaction.id,
+        account_id: input.accountId,
+        type: input.type,
+        direction: input.direction,
+        amount: formatAmountMinor(input.amountMinor),
+        currency: CURRENCY,
+        reference: input.reference ?? null,
+        end_to_end_id: input.endToEndId ?? null,
+        value_date: value,
+        booking_date: booking,
+        reversal_of: input.reversalOf ?? null,
+        balance: {
+          ledger: formatAmountMinor(next.ledgerMinor),
+          held: formatAmountMinor(next.heldMinor),
+          available: formatAmountMinor(availableMinor(next)),
+        },
+      },
+    });
+  }
 
   return {
     transaction: {

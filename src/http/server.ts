@@ -10,6 +10,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerOpsRoutes } from "./routes/ops.js";
 import { registerPayoutRoutes } from "./routes/payouts.js";
 import { registerStatementRoutes } from "./routes/statements.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 
 export function buildServer(env: Env): FastifyInstance {
   const app = Fastify({
@@ -45,6 +46,7 @@ export function buildServer(env: Env): FastifyInstance {
   registerPayoutRoutes(app, { db, env, clock });
   registerStatementRoutes(app, { db, env, clock });
   registerEodRoutes(app, { db, env, clock });
+  registerWebhookRoutes(app, { db, env });
   registerOpsRoutes(app, { db, env, clock });
 
   return app;

@@ -14,7 +14,9 @@ const rawEnvSchema = z
     ENABLE_DEV_OPS: z.enum(["true", "false"]).default("false"),
     OPS_DEV_TOKEN: z.string().min(8).default("dev-ops-token"),
     API_KEY_PEPPER: z.string().min(16),
-    SERVICE_VERSION: z.string().min(1).default("0.3.0-dev.0"),
+    // Optional dedicated key for encrypting webhook signing secrets at rest.
+    WEBHOOK_SECRET_KEY: z.string().min(16).optional(),
+    SERVICE_VERSION: z.string().min(1).default("0.4.0-dev.0"),
     GIT_COMMIT: z.string().min(1).default("dev"),
   })
   .superRefine((value, ctx) => {
@@ -37,6 +39,7 @@ export interface Env {
   enableDevOps: boolean;
   opsDevToken: string;
   apiKeyPepper: string;
+  webhookSecretKey?: string;
   version: string;
   gitCommit: string;
 }
@@ -61,6 +64,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
     enableDevOps: value.ENABLE_DEV_OPS === "true",
     opsDevToken: value.OPS_DEV_TOKEN,
     apiKeyPepper: value.API_KEY_PEPPER,
+    webhookSecretKey: value.WEBHOOK_SECRET_KEY,
     version: value.SERVICE_VERSION,
     gitCommit: value.GIT_COMMIT,
   };

@@ -54,7 +54,7 @@ describe("http surface", () => {
       expect(response.json().mode).toBe("sim");
     }
     const version = await app.inject({ method: "GET", url: "/version" });
-    expect(version.json().schema_version).toBe("0004_statements_eod.sql");
+    expect(version.json().schema_version).toBe("0005_outbox_webhooks.sql");
     expect(version.headers["x-request-id"]).toBeTruthy();
   });
 

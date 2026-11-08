@@ -3,6 +3,50 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [0.4.0-dev.0] — 2026-11-07
+
+Phase 8 of the S2 build (`S2-08`).
+
+### Added
+
+- `0005_outbox_webhooks.sql`: `outbox_events` with a monotonic `seq` cursor,
+  `webhook_subscriptions` with an encrypted signing secret, and
+  `webhook_deliveries` with attempts, backoff, last status/error and signature.
+- Transactional outbox: credits, reversals, holds, payout transitions and EOD
+  closes write their event in the same transaction as the business change.
+- Event registry and filters: exact types, families (`payout.*`) and `*`.
+- HMAC-SHA256 signing (`x-sim-signature: t=<unix>,v1=<hex>` over
+  `${t}.${body}`) with a 5-minute verification tolerance.
+- Webhook secrets are `whsec_…`, shown at registration, stored AES-256-GCM
+  encrypted with `WEBHOOK_SECRET_KEY` or a distinct key derived from
+  `API_KEY_PEPPER`.
+- At-least-once delivery with a 5-second timeout, exponential backoff
+  (`2^attempts` seconds, capped at 300s), 5 attempts, then dead-letter.
+- `FOR UPDATE SKIP LOCKED` claiming so concurrent dispatchers cannot double-send;
+  stale `delivering` rows are re-queued after a crash.
+- Tenant routes: register/list/disable subscriptions, delivery history, and a
+  cursor pull API (`GET /v1/events?after=<seq>`).
+- Ops routes: cross-tenant dispatch and delivery replay.
+- Unit tests for filters, URL policy, backoff, encryption and signatures;
+  integration tests with a real local HTTP receiver for signed delivery, retry,
+  dead-letter/replay, isolation, scopes, pagination and disable.
+
+### Changed
+
+- Default API-key scopes now include `webhooks:read`, `webhooks:write` and
+  `events:read`.
+- `/v1/outbox/dispatch` and `/ops/v1/outbox/dispatch` are control-plane ticks and
+  are exempt from `Idempotency-Key`; every other write still requires it.
+- Version is `0.4.0-dev.0`.
+
+### Known limits
+
+- Delivery is in-process: nothing runs a worker on a schedule; a cron or the ops
+  endpoint must call dispatch.
+- Events are stored forever (no retention policy yet).
+- No per-subscription rate limit or circuit breaker beyond attempt backoff.
+- No failure scenarios, ops console, OpenAPI, or live deploy yet.
+
 ## [0.3.0-dev.0] — 2026-11-07
 
 Phase 7 of the S2 build (`S2-07`).
