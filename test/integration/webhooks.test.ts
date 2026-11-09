@@ -217,6 +217,7 @@ describe("outbox and signed webhooks", () => {
 
     responder = (attempt) => (attempt === 1 ? 500 : 200);
 
+    const dispatchedAt = Date.now();
     const first = await dispatch();
     expect(first).toMatchObject({ claimed: 1, delivered: 0, failed: 1, dead: 0 });
     expect(requests).toHaveLength(1);
@@ -228,7 +229,10 @@ describe("outbox and signed webhooks", () => {
       last_status_code: 500,
     });
     expect(afterFirst[0]?.last_error).toMatch(/receiver returned 500/);
-    expect(Date.parse(String(afterFirst[0]?.next_retry_at))).toBeGreaterThan(Date.now());
+    // The retry must be scheduled after the dispatch started. Comparing with
+    // Date.now() *here* races the database round-trip (a remote database can
+    // take longer than the fixed backoff), so compare with the dispatch start.
+    expect(Date.parse(String(afterFirst[0]?.next_retry_at))).toBeGreaterThan(dispatchedAt);
 
     // Not due yet: a second tick must not send again.
     const tooSoon = await dispatch();

@@ -7,7 +7,7 @@ import {
   stringSchema,
 } from "./schema.js";
 
-export const API_VERSION = "0.7.0-dev.0";
+export const API_VERSION = "1.0.0";
 
 /**
  * Writes that are deliberately exempt from `Idempotency-Key`: worker ticks and

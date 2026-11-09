@@ -1,6 +1,6 @@
 {
   "name": "sim-s2-bank",
-  "version": "0.8.0-dev.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "S2 bank simulator - corporate AED ledger, statements, and local payout rail (simulated)",
@@ -23,7 +23,8 @@
     "migrate": "tsx src/cli/migrate.ts",
     "seed": "tsx src/cli/seed.ts",
     "reset": "tsx src/cli/reset.ts",
-    "ops:user": "tsx src/cli/ops-user.ts"
+    "ops:user": "tsx src/cli/ops-user.ts",
+    "key:issue": "tsx src/cli/api-key.ts"
   },
   "dependencies": {
     "fastify": "^5.2.0",
