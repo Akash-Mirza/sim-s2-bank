@@ -54,7 +54,7 @@ never committed here.
 
 | Gate | Command | Result |
 |---|---|---|
-| Format + lint | `pnpm lint` | 95 files, 0 diagnostics |
+| Format + lint | `pnpm lint` | 96 files, 0 diagnostics |
 | Types | `pnpm typecheck` | 0 errors |
 | Unit + contract | `pnpm test` | **93 / 93**, 14 files |
 | Integration (real Postgres) | `pnpm test:integration` | **66 / 66**, 9 files — against **Neon PostgreSQL 18.6**, database `sim_s2_test` |
