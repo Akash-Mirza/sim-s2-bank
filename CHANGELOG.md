@@ -36,7 +36,7 @@ the contract is frozen. See `RELEASE.md` for the certificate and the live matrix
 
 ### Verified
 
-- Gates: lint 95 files, typecheck 0, 93 unit+contract, **66 integration on Neon
+- Gates: lint 96 files, typecheck 0, 93 unit+contract, **66 integration on Neon
   PostgreSQL 18.6**, build pass, `openapi:check` current.
 - Live: Neon migrated `0005 → 0007`; `v1.0.0` deployed; `/version` reports
   `1.0.0` / `0df9a18` / `0007_ops_sessions.sql`; session login, tenant credit,
