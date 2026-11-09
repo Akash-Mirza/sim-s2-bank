@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: "S2 — Bank Simulator API"
-  version: 0.7.0-dev.0
+  version: 1.0.0
   description: "Simulated corporate AED bank: ledger, holds, payouts, statements, EOD, signed webhooks, failure scenarios and the ops console. Every response carries mode=sim; the data is synthetic."
 servers:
   - url: "https://sim-s2-bank.vercel.app"

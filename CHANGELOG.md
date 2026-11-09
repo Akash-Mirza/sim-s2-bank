@@ -3,6 +3,55 @@
 All notable changes to the S2 bank simulator. SemVer; `v0.1.0` is the first
 deployed contract, `v1.0.0` the first frozen contract.
 
+## [1.0.0] — 2026-11-09
+
+Phase 13 of the S2 build (`S2-13`, release). The production cutover is done and
+the contract is frozen. See `RELEASE.md` for the certificate and the live matrix.
+
+### Added
+
+- `RELEASE.md`: freeze certificate, environment of record, verification matrix,
+  cutover record and known limits.
+- `key:issue` CLI (`src/cli/api-key.ts`): `create`, `list`, `revoke` for tenant API
+  keys. `create` prints the plaintext key once; `list` is metadata-only. The seed
+  refuses to re-issue once a key exists, so a rotated pepper previously had no way
+  to mint a working key.
+- `test/integration/api-keys.test.ts`: issue → authenticate → list without the
+  secret → revoke → `401`; scope-limited key gets `403`; unknown prefix returns
+  `null`.
+
+### Changed
+
+- Version `1.0.0` in `package.json`, the `SERVICE_VERSION` default and the OpenAPI
+  `info.version`; `openapi.yaml` regenerated from `src/contracts/spec.ts`.
+- `vitest` per-test timeout 20 s → 60 s: a remote (Neon) database costs a network
+  round-trip per query, so database-heavy tests exceeded the local-Docker budget.
+- README/SPEC state 13 of 13 packets and production `v1.0.0` / schema `0007`.
+
+### Fixed
+
+- `test/integration/webhooks.test.ts` compared a stored `next_retry_at` with
+  `Date.now()` after the read; over a remote database the round-trip outlasted the
+  fixed 2 s backoff. It now compares with the dispatch start time.
+
+### Verified
+
+- Gates: lint 95 files, typecheck 0, 93 unit+contract, **66 integration on Neon
+  PostgreSQL 18.6**, build pass, `openapi:check` current.
+- Live: Neon migrated `0005 → 0007`; `v1.0.0` deployed; `/version` reports
+  `1.0.0` / `0df9a18` / `0007_ops_sessions.sql`; session login, tenant credit,
+  idempotent replay, payout to `settled`, `underpaid` scenario, three statement
+  formats, EOD close + replay, signed webhook attempt, event cursor and audit all
+  exercised against production.
+
+### Not done
+
+- No successful external webhook delivery was observed in production (the live
+  attempt used a receiver returning 500); the success path is covered by the
+  integration suite.
+- No performance or load measurements.
+- Beneficiary book stays out of scope (S10).
+
 ## [0.8.0-dev.0] — 2026-11-08
 
 Phase 12 of the S2 build (`S2-12`, deploy verification).

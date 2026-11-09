@@ -8,15 +8,20 @@ double-entry ledger in fils, simulated incoming credit, replay-safe writes, hold
 local AED payouts with a UAE cut-off, statements, and signed webhooks. Every
 response carries `"mode":"sim"` and the data is synthetic.
 
-Status: **phases 1–12 of 13 shipped** (`v0.8.0-dev.0`) — scaffold and deploy
-contract, schema/migrations/seed, double-entry ledger, accounts and balances,
-idempotency, holds and payouts, statements/EOD and the adjustable ops clock, the
-transactional outbox with signed webhook delivery, armed failure scenarios, the ops
-console with real session auth, the generated OpenAPI contract with contract
-tests, and the integration suite running green against a real Postgres.
+Status: **phases 1–13 of 13 shipped — released `v1.0.0` (2026-11-09)** — scaffold
+and deploy contract, schema/migrations/seed, double-entry ledger, accounts and
+balances, idempotency, holds and payouts, statements/EOD and the adjustable ops
+clock, the transactional outbox with signed webhook delivery, armed failure
+scenarios, the ops console with real session auth, the generated OpenAPI contract
+with contract tests, the integration suite running green against a real Postgres,
+and the production cutover + release freeze.
 
 Production demo: **https://sim-s2-bank.vercel.app** (Vercel Functions in `sin1`,
-Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
+Neon Postgres in `ap-southeast-1`, dev-ops routes disabled, schema `0007`).
+
+Live credentials are **not in the repo**. Issue a tenant key against the production
+database with `pnpm key:issue create --tenant demo-bank-client` (prints once), and
+create an ops user with `pnpm ops:user create`. See `RELEASE.md`.
 
 ## Scope delivered so far
 
@@ -33,10 +38,11 @@ Neon Postgres in `ap-southeast-1`, dev-ops routes disabled).
 | 9 | `S2-09` | Failure scenarios: underpaid settlement, sanctions hold, rail timeout, return before settlement; tenant and ops scenario routes |
 | 10 | `S2-10` | Ops users (scrypt), sessions with roles (viewer/operator/admin), session guard replacing the dev token in production, and the `/ops/console` UI |
 | 11 | `S2-11` | Contract as code: 53-route table, generated `openapi.yaml` and `api-types.ts`, contract tests for route parity, idempotency coverage and drift |
-| 12 | `S2-12` | Integration suite executed against Postgres 16 (8 files, 63 tests) and a production-shape runtime smoke: session login, roles, console, 401 gates, schema report |
+| 12 | `S2-12` | Integration suite executed against Postgres (8 files, 63 tests) and a production-shape runtime smoke: session login, roles, console, 401 gates, schema report |
+| 13 | `S2-13` | Release: Neon migrated to `0007`, `v1.0.0` deployed and smoked live, `key:issue` CLI for credential rotation, `RELEASE.md` freeze certificate, tag `v1.0.0` |
 
-Not built yet: beneficiary book, the `0.8.0` production cutover (Neon `0006`/`0007`
-still unapplied), and the `S2-13` release.
+Not built: the beneficiary book (explicitly out of S2 scope — S10 cross-border) and
+real bank connectivity. There is no planned S2 packet left.
 
 ## Run locally
 
@@ -160,6 +166,11 @@ DATABASE_URL='<neon-direct-url>' API_KEY_PEPPER='<32+ bytes>' \
 # 2. seed the demo tenant once; it prints the API key exactly once
 DATABASE_URL='<neon-direct-url>' API_KEY_PEPPER='<same pepper>' \
   NODE_ENV=production ENABLE_DEV_OPS=false node dist/cli/seed.js
+
+#    rotate or re-issue a tenant key at any time (prints the new key once)
+pnpm key:issue create --tenant demo-bank-client
+pnpm key:issue list --tenant demo-bank-client
+pnpm key:issue revoke --prefix <prefix>
 
 # 3. deploy; set the same API_KEY_PEPPER, WEBHOOK_SECRET_KEY, OPS_DEV_TOKEN,
 #    DATABASE_URL (pooled), ENABLE_DEV_OPS=false and SERVICE_VERSION in Vercel
